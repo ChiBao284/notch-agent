@@ -12,6 +12,10 @@ struct ClaudeInstancesView: View {
     @ObservedObject var sessionMonitor: ClaudeSessionMonitor
     @ObservedObject var viewModel: NotchViewModel
 
+    /// Height the session rows actually occupy, so the blank space underneath
+    /// can be handed to the open-Claude backdrop instead of the scroll view.
+    @State private var listContentHeight: CGFloat = 0
+
     var body: some View {
         if sessionMonitor.instances.isEmpty {
             emptyState
@@ -20,19 +24,28 @@ struct ClaudeInstancesView: View {
         }
     }
 
+    /// Session the backdrop falls back to when Claude Desktop isn't installed:
+    /// whatever wants attention first, else the most recently active.
+    private var focusTargetSession: SessionState? {
+        sessionMonitor.instances.first { $0.phase.isWaitingForApproval }
+            ?? sessionMonitor.instances.first { $0.phase == .processing }
+            ?? sessionMonitor.instances.max { $0.lastActivity < $1.lastActivity }
+    }
+
     // MARK: - Empty State
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Text("No sessions")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.notchFG.opacity(0.4))
+        OpenClaudeBackdrop(session: nil) {
+            VStack(spacing: 8) {
+                Text("No sessions")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.notchFG.opacity(0.4))
 
-            Text("Run claude in terminal")
-                .font(.system(size: 11))
-                .foregroundColor(.notchFG.opacity(0.25))
+                Text("Run claude in terminal")
+                    .font(.system(size: 11))
+                    .foregroundColor(.notchFG.opacity(0.25))
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Instances List
@@ -66,23 +79,42 @@ struct ClaudeInstancesView: View {
     }
 
     private var instancesList: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            LazyVStack(spacing: 2) {
-                ForEach(sortedInstances) { session in
-                    InstanceRow(
-                        session: session,
-                        onFocus: { focusSession(session) },
-                        onChat: { openChat(session) },
-                        onArchive: { archiveSession(session) },
-                        onApprove: { approveSession(session) },
-                        onReject: { rejectSession(session) }
-                    )
-                    .id(session.stableId)
+        VStack(spacing: 0) {
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 2) {
+                    ForEach(sortedInstances) { session in
+                        InstanceRow(
+                            session: session,
+                            onFocus: { focusSession(session) },
+                            onChat: { openChat(session) },
+                            onArchive: { archiveSession(session) },
+                            onApprove: { approveSession(session) },
+                            onReject: { rejectSession(session) }
+                        )
+                        .id(session.stableId)
+                    }
+                }
+                .padding(.vertical, 4)
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.size.height
+                } action: { height in
+                    listContentHeight = height
                 }
             }
-            .padding(.vertical, 4)
+            .scrollBounceBehavior(.basedOnSize)
+            // Cap the scroll view at its content height so the leftover space
+            // goes to the backdrop instead of the list.
+            .frame(maxHeight: listContentHeight > 0 ? listContentHeight : .infinity)
+            // Required: without a higher priority the VStack splits the panel
+            // evenly between these two flexible children, so a list of five or
+            // more rows gets squeezed into half the panel.
+            .layoutPriority(1)
+
+            // Blank space below the rows — a click here brings Claude back.
+            // Deliberately a sibling of the list rather than a background, so a
+            // click on a row can never reach it.
+            OpenClaudeBackdrop(session: focusTargetSession) { EmptyView() }
         }
-        .scrollBounceBehavior(.basedOnSize)
     }
 
     // MARK: - Actions
@@ -107,6 +139,48 @@ struct ClaudeInstancesView: View {
 
     private func archiveSession(_ session: SessionState) {
         sessionMonitor.archiveSession(sessionId: session.sessionId)
+    }
+}
+
+// MARK: - Open Claude Backdrop
+
+/// Fills the panel's blank space and reopens Claude when clicked.
+///
+/// The hint only appears on hover: the gesture would otherwise be invisible,
+/// but a permanent label would clutter a panel that is mostly a session list.
+private struct OpenClaudeBackdrop<Content: View>: View {
+    let session: SessionState?
+    @ViewBuilder let content: () -> Content
+
+    @State private var isHovering = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            content()
+
+            if isHovering {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.system(size: 10))
+                    Text(ClaudeAppLauncher.shared.actionHint)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(.notchFG.opacity(0.35))
+                .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.15)) {
+                isHovering = hovering
+            }
+        }
+        .onTapGesture {
+            Task {
+                await ClaudeAppLauncher.shared.openClaude(fallbackSession: session)
+            }
+        }
     }
 }
 
@@ -144,19 +218,34 @@ struct InstanceRow: View {
         return toolName == "AskUserQuestion"
     }
 
-    /// The prompt the user last sent, unless it is already the row title.
-    ///
-    /// Without a summary the title *is* the first prompt, so on a session with a
-    /// single message both lines would print the same sentence.
-    private var myLastMessage: String? {
-        guard let message = session.lastUserMessage else { return nil }
+    /// Row heading: the prompt you last sent, falling back to the session's
+    /// own title while no prompt has been parsed yet.
+    private var headingText: String {
+        session.lastUserMessage ?? session.displayTitle
+    }
 
-        if session.summary == nil, let first = session.firstUserMessage {
-            let stem = first.hasSuffix("...") ? String(first.dropLast(3)) : first
-            if !stem.isEmpty && message.hasPrefix(stem) { return nil }
+    /// Whether the second line is reporting live activity rather than a reply.
+    private var isShowingActivity: Bool {
+        session.phase.isRunningTurn
+    }
+
+    /// Second line: live activity while the turn runs, Claude's reply once done.
+    ///
+    /// Falls back to the phase so the line never goes blank — a tool-only turn
+    /// carries no prose, and a fresh session has no reply at all.
+    private var secondLineText: String {
+        guard isShowingActivity else {
+            return session.lastAssistantMessage ?? phaseStatusText
         }
 
-        return message
+        // Mid-turn the useful thing is the tool in flight.
+        if session.lastMessageRole == "tool", let detail = session.lastMessage {
+            if let tool = session.lastToolName {
+                return "\(MCPToolFormatter.formatToolName(tool)) \(detail)"
+            }
+            return detail
+        }
+        return session.lastAssistantMessage ?? phaseStatusText
     }
 
     /// Status text based on session phase (fallback when no other content)
@@ -186,10 +275,11 @@ struct InstanceRow: View {
             // Text content
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(session.displayTitle)
+                    Text(headingText)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.notchFG)
                         .lineLimit(1)
+                        .truncationMode(.tail)
 
                     // Token usage indicator
                     if session.usage.totalTokens > 0 {
@@ -198,35 +288,6 @@ struct InstanceRow: View {
                             .foregroundColor(.notchFG.opacity(0.3))
                     }
                 }
-
-                // Project + branch — what tells two sessions apart when several
-                // repos (or worktrees of one repo) are running at once.
-                HStack(spacing: 6) {
-                    Label {
-                        Text(session.projectName)
-                            .font(.system(size: 10, weight: .medium))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    } icon: {
-                        Image(systemName: "folder")
-                            .font(.system(size: 9))
-                    }
-                    .foregroundColor(.notchFG.opacity(0.45))
-
-                    if let branch = session.gitBranch {
-                        Label {
-                            Text(branch)
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        } icon: {
-                            Image(systemName: "arrow.triangle.branch")
-                                .font(.system(size: 9))
-                        }
-                        .foregroundColor(TerminalColors.prompt.opacity(0.8))
-                    }
-                }
-                .labelStyle(.titleAndIcon)
 
                 // Show tool call when waiting for approval, otherwise last activity
                 if isWaitingForApproval, let toolName = session.pendingToolName {
@@ -247,25 +308,20 @@ struct InstanceRow: View {
                                 .lineLimit(1)
                         }
                     }
-                } else if let myMessage = myLastMessage {
-                    // The prompt you last sent — what you asked for reads as more
-                    // useful context here than whatever Claude last emitted.
-                    HStack(spacing: 4) {
-                        Text("You:")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.notchFG.opacity(0.5))
-                        Text(myMessage)
-                            .font(.system(size: 11))
-                            .foregroundColor(.notchFG.opacity(0.4))
-                            .lineLimit(1)
-                    }
                 } else {
-                    // Fallback: show phase-based status when no other content
-                    Text(phaseStatusText)
+                    // Italic while work is in flight, upright once it's a reply —
+                    // the slant is what distinguishes "doing" from "said".
+                    Text(secondLineText)
                         .font(.system(size: 11))
-                        .foregroundColor(.notchFG.opacity(0.4))
+                        .italic(isShowingActivity)
+                        .foregroundColor(.notchFG.opacity(isShowingActivity ? 0.4 : 0.45))
                         .lineLimit(1)
+                        .truncationMode(.tail)
                 }
+
+                // Project + branch — what tells two sessions apart when several
+                // repos (or worktrees of one repo) are running at once.
+                SessionMetaLine(session: session)
             }
 
             Spacer(minLength: 0)

@@ -78,7 +78,7 @@ enum MessageChannel: Equatable, Sendable {
     var failureExplanation: String {
         switch self {
         case .unavailable(.needsAccessibility(let appName)):
-            return "Grant Accessibility to Vibe Notch to type into \(appName)"
+            return "Grant Accessibility to NotchAgent to type into \(appName)"
         case .unavailable(.embeddedTerminal(let appName)):
             return "Can't type into \(appName) safely — run Claude Code in tmux or Terminal"
         case .unavailable(.noTerminal):

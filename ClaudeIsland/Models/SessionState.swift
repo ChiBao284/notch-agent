@@ -26,6 +26,13 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// Checked-out branch for `cwd`, refreshed on each status tick.
     var gitBranch: String?
 
+    /// When the current turn started running, or nil when the session is at rest.
+    /// Drives the elapsed-time readout on the collapsed notch.
+    var turnStartedAt: Date?
+
+    /// When the last turn finished, for the "2 minutes ago" readout.
+    var turnEndedAt: Date?
+
     // MARK: - State Machine
 
     /// Current phase in the session lifecycle
@@ -75,6 +82,8 @@ struct SessionState: Equatable, Identifiable, Sendable {
         tty: String? = nil,
         isInTmux: Bool = false,
         gitBranch: String? = nil,
+        turnStartedAt: Date? = nil,
+        turnEndedAt: Date? = nil,
         phase: SessionPhase = .idle,
         chatItems: [ChatHistoryItem] = [],
         toolTracker: ToolTracker = ToolTracker(),
@@ -82,7 +91,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         conversationInfo: ConversationInfo = ConversationInfo(
             summary: nil, lastMessage: nil, lastMessageRole: nil,
             lastToolName: nil, firstUserMessage: nil, lastUserMessage: nil,
-            lastUserMessageDate: nil
+            lastAssistantMessage: nil, lastUserMessageDate: nil
         ),
         needsClearReconciliation: Bool = false,
         lastActivity: Date = Date(),
@@ -95,6 +104,8 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.tty = tty
         self.isInTmux = isInTmux
         self.gitBranch = gitBranch
+        self.turnStartedAt = turnStartedAt
+        self.turnEndedAt = turnEndedAt
         self.phase = phase
         self.chatItems = chatItems
         self.toolTracker = toolTracker
@@ -183,6 +194,11 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// Text of the most recent message the user sent
     var lastUserMessage: String? {
         conversationInfo.lastUserMessage
+    }
+
+    /// Text of Claude's most recent reply
+    var lastAssistantMessage: String? {
+        conversationInfo.lastAssistantMessage
     }
 
     /// Last user message date

@@ -172,6 +172,17 @@ enum SessionPhase: Sendable {
         }
     }
 
+    /// Whether a turn is open — working, or paused waiting for an approval.
+    /// The elapsed-time clock runs for exactly these phases.
+    var isRunningTurn: Bool {
+        switch self {
+        case .processing, .compacting, .waitingForApproval:
+            return true
+        case .idle, .waitingForInput, .ended:
+            return false
+        }
+    }
+
     /// Whether this is a waitingForApproval phase
     var isWaitingForApproval: Bool {
         if case .waitingForApproval = self {

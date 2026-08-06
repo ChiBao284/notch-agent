@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build Vibe Notch for release
+# Build NotchAgent for release
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,7 +8,7 @@ BUILD_DIR="$PROJECT_DIR/build"
 ARCHIVE_PATH="$BUILD_DIR/ClaudeIsland.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 
-echo "=== Building Vibe Notch ==="
+echo "=== Building NotchAgent ==="
 echo ""
 
 # Clean previous builds
@@ -84,6 +84,6 @@ fi
 
 echo ""
 echo "=== Build Complete ==="
-echo "App exported to: $EXPORT_PATH/Vibe Notch.app"
+echo "App exported to: $EXPORT_PATH/NotchAgent.app"
 echo ""
 echo "Next: Run ./scripts/create-release.sh to notarize and create DMG"

@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Vibe Notch</string>
+    <string>NotchAgent</string>
     <key>CFBundleDisplayName</key>
-    <string>Vibe Notch</string>
+    <string>NotchAgent</string>
     <key>CFBundleIdentifier</key>
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleVersion</key>
@@ -19,7 +19,7 @@
 
     <!-- Needed to deliver messages typed in the notch into a Terminal/iTerm2 tab -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>Vibe Notch needs to control your terminal so messages you type in the notch reach the Claude Code session running there.</string>
+    <string>NotchAgent needs to control your terminal so messages you type in the notch reach the Claude Code session running there.</string>
 
     <!-- Sparkle Update Configuration -->
     <key>SUFeedURL</key>

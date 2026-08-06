@@ -39,6 +39,7 @@ struct ConversationInfo: Equatable {
     let lastToolName: String?  // Tool name if lastMessageRole is "tool"
     let firstUserMessage: String?  // Fallback title when no summary
     let lastUserMessage: String?  // Text of the last message the user sent
+    let lastAssistantMessage: String?  // Text of Claude's most recent reply
     let lastUserMessageDate: Date?  // Timestamp of last user message (for stable sorting)
     var usage: UsageInfo = UsageInfo()  // Token usage stats
 }
@@ -111,7 +112,7 @@ actor ConversationParser {
         guard fileManager.fileExists(atPath: sessionFile),
               let attrs = try? fileManager.attributesOfItem(atPath: sessionFile),
               let modDate = attrs[.modificationDate] as? Date else {
-            return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessage: nil, lastUserMessageDate: nil)
+            return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessage: nil, lastAssistantMessage: nil, lastUserMessageDate: nil)
         }
 
         if let cached = cache[sessionFile], cached.modificationDate == modDate {
@@ -120,7 +121,7 @@ actor ConversationParser {
 
         guard let data = fileManager.contents(atPath: sessionFile),
               let content = String(data: data, encoding: .utf8) else {
-            return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessage: nil, lastUserMessageDate: nil)
+            return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessage: nil, lastAssistantMessage: nil, lastUserMessageDate: nil)
         }
 
         let info = parseContent(content)
@@ -139,6 +140,7 @@ actor ConversationParser {
         var lastToolName: String?
         var firstUserMessage: String?
         var lastUserMessage: String?
+        var lastAssistantMessage: String?
         var lastUserMessageDate: Date?
         var usage = UsageInfo()
 
@@ -182,6 +184,7 @@ actor ConversationParser {
         }
 
         var foundLastUserMessage = false
+        var foundLastAssistantMessage = false
         for line in lines.reversed() {
             guard let lineData = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
@@ -234,11 +237,18 @@ actor ConversationParser {
                 }
             }
 
+            if !foundLastAssistantMessage && type == "assistant",
+               let message = json["message"] as? [String: Any],
+               let text = Self.assistantText(from: message["content"]) {
+                lastAssistantMessage = text
+                foundLastAssistantMessage = true
+            }
+
             if summary == nil, type == "summary", let summaryText = json["summary"] as? String {
                 summary = summaryText
             }
 
-            if summary != nil && lastMessage != nil && foundLastUserMessage {
+            if summary != nil && lastMessage != nil && foundLastUserMessage && foundLastAssistantMessage {
                 break
             }
         }
@@ -250,6 +260,7 @@ actor ConversationParser {
             lastToolName: lastToolName,
             firstUserMessage: firstUserMessage,
             lastUserMessage: Self.truncateMessage(lastUserMessage, maxLength: 80),
+            lastAssistantMessage: Self.truncateMessage(lastAssistantMessage, maxLength: 90),
             lastUserMessageDate: lastUserMessageDate,
             usage: usage
         )
@@ -265,6 +276,11 @@ actor ConversationParser {
                 return (filePath as NSString).lastPathComponent
             }
         case "Bash":
+            // The description is written for humans; the raw command is noise
+            // in a one-line status.
+            if let description = input["description"] as? String, !description.isEmpty {
+                return description
+            }
             if let command = input["command"] as? String {
                 return command
             }
@@ -322,6 +338,26 @@ actor ConversationParser {
                   !text.hasPrefix("<command-name>"),
                   !text.hasPrefix("<local-command"),
                   !text.hasPrefix("Caveat:") else { continue }
+            return text
+        }
+        return nil
+    }
+
+    /// Claude's prose from an assistant turn, or nil for a tool-only turn.
+    ///
+    /// A turn that just calls tools carries no text block, and the interrupt
+    /// marker is bookkeeping rather than something Claude said.
+    private static func assistantText(from content: Any?) -> String? {
+        if let text = content as? String {
+            return text.hasPrefix("[Request interrupted by user") ? nil : text
+        }
+
+        guard let blocks = content as? [[String: Any]] else { return nil }
+
+        for block in blocks.reversed() where block["type"] as? String == "text" {
+            guard let text = block["text"] as? String,
+                  !text.hasPrefix("[Request interrupted by user"),
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             return text
         }
         return nil

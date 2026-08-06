@@ -64,6 +64,40 @@ struct NotchView: View {
         )
     }
 
+    /// Longest-running session — the notch has one clock and one activity line,
+    /// so it reports the work that has been going on longest, not the newest.
+    private var runningSession: SessionState? {
+        sessionMonitor.instances
+            .filter { $0.phase.isRunningTurn && $0.turnStartedAt != nil }
+            .min { ($0.turnStartedAt ?? .distantFuture) < ($1.turnStartedAt ?? .distantFuture) }
+    }
+
+    private var runningSince: Date? {
+        runningSession?.turnStartedAt
+    }
+
+    /// What that session is doing right now, for the opened header.
+    private var liveActivityText: String? {
+        guard let session = runningSession else { return nil }
+
+        if let pending = session.pendingToolName {
+            return "\(MCPToolFormatter.formatToolName(pending)) needs approval"
+        }
+        if session.phase == .compacting {
+            return "Compacting context"
+        }
+        guard session.lastMessageRole == "tool", let detail = session.lastMessage else {
+            return nil
+        }
+        guard let tool = session.lastToolName else { return detail }
+        return "\(MCPToolFormatter.formatToolName(tool)) \(detail)"
+    }
+
+    /// Whether the collapsed pill is showing the elapsed-time readout.
+    private var showsElapsedTime: Bool {
+        viewModel.status != .opened && runningSince != nil
+    }
+
     /// Extra width for expanding activities (like Dynamic Island)
     private var expansionWidth: CGFloat {
         // Permission indicator adds width on left side only
@@ -153,6 +187,11 @@ struct NotchView: View {
 
     private var pillOrange: Color {
         pillIsBlack ? PillColors.orange : TerminalColors.claudeOrange
+    }
+
+    /// Clock text on the pill — light while the pill is pinned black.
+    private var pillTimeColor: Color {
+        pillIsBlack ? .white.opacity(0.55) : .notchFG.opacity(0.5)
     }
 
     // Animation springs
@@ -311,10 +350,22 @@ struct NotchView: View {
             // Right side - spinner when processing/pending, checkmark when waiting for input
             if showClosedActivity {
                 if isProcessing || hasPendingPermission {
-                    ProcessingSpinner()
-                        .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
-                        .frame(width: viewModel.status == .opened ? 20 : sideWidth)
-                        .padding(.trailing, viewModel.status == .opened ? 0 : 4)
+                    HStack(spacing: 3) {
+                        ProcessingSpinner()
+                            .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
+
+                        // How long this turn has been running. Collapsed only —
+                        // the expanded panel has room to say it per session.
+                        if showsElapsedTime, let runningSince {
+                            ElapsedTimeLabel(since: runningSince, color: pillTimeColor)
+                                .transition(.opacity)
+                        }
+                    }
+                    // Sized to its content, not a fixed width: padding the group
+                    // out to a fixed size grew the pill past the notch shoulder
+                    // and covered the menu bar icons beside it.
+                    .frame(minWidth: viewModel.status == .opened ? 20 : sideWidth, alignment: .trailing)
+                    .padding(.trailing, viewModel.status == .opened ? 0 : 4)
                 } else if hasWaitingForInput {
                     // Checkmark for waiting-for-input on the right side
                     ReadyForInputIndicatorIcon(size: 14, color: pillGreen)
@@ -359,7 +410,20 @@ struct NotchView: View {
                     .padding(.leading, 8)
             }
 
-            Spacer()
+            // Live activity fills the header's dead space, so what Claude is
+            // doing is visible from any screen of the panel — including the chat
+            // view — without widening the collapsed pill.
+            if let activity = liveActivityText {
+                Text(activity)
+                    .font(.system(size: 11))
+                    .italic()
+                    .foregroundColor(.notchFG.opacity(0.4))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .transition(.opacity)
+            }
+
+            Spacer(minLength: 8)
 
             // Menu toggle
             Button {

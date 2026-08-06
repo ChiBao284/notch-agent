@@ -16,7 +16,7 @@ GITHUB_REPO="farouqaldori/vibe-notch"
 WEBSITE_DIR="${CLAUDE_ISLAND_WEBSITE:-$PROJECT_DIR/../ClaudeIsland-website}"
 WEBSITE_PUBLIC="$WEBSITE_DIR/public"
 
-APP_PATH="$EXPORT_PATH/Vibe Notch.app"
+APP_PATH="$EXPORT_PATH/NotchAgent.app"
 APP_NAME="VibeNotch"
 KEYCHAIN_PROFILE="ClaudeIsland"
 
@@ -100,17 +100,17 @@ fi
 if command -v create-dmg &> /dev/null; then
     echo "Using create-dmg for prettier output..."
     create-dmg \
-        --volname "Vibe Notch" \
+        --volname "NotchAgent" \
         --window-size 600 400 \
         --icon-size 100 \
-        --icon "Vibe Notch.app" 150 200 \
+        --icon "NotchAgent.app" 150 200 \
         --app-drop-link 450 200 \
-        --hide-extension "Vibe Notch.app" \
+        --hide-extension "NotchAgent.app" \
         "$DMG_PATH" \
         "$APP_PATH"
 else
     echo "Using hdiutil (install create-dmg for prettier DMG: brew install create-dmg)"
-    hdiutil create -volname "Vibe Notch" \
+    hdiutil create -volname "NotchAgent" \
         -srcfolder "$APP_PATH" \
         -ov -format UDZO \
         "$DMG_PATH"
@@ -215,16 +215,16 @@ else
         echo "Creating release v$VERSION..."
         gh release create "v$VERSION" "$DMG_PATH" \
             --repo "$GITHUB_REPO" \
-            --title "Vibe Notch v$VERSION" \
-            --notes "## Vibe Notch v$VERSION
+            --title "NotchAgent v$VERSION" \
+            --notes "## NotchAgent v$VERSION
 
 ### Installation
 1. Download \`$APP_NAME-$VERSION.dmg\`
-2. Open the DMG and drag Vibe Notch to Applications
-3. Launch Vibe Notch from Applications
+2. Open the DMG and drag NotchAgent to Applications
+3. Launch NotchAgent from Applications
 
 ### Auto-updates
-After installation, Vibe Notch will automatically check for updates."
+After installation, NotchAgent will automatically check for updates."
     fi
 
     GITHUB_DOWNLOAD_URL="https://github.com/$GITHUB_REPO/releases/download/v$VERSION/$APP_NAME-$VERSION.dmg"

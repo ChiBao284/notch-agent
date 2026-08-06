@@ -147,6 +147,7 @@ actor SessionStore {
         }
 
         let newPhase = event.determinePhase()
+        let wasRunning = session.phase.isRunningTurn
 
         if session.phase == .waitingForInput, newPhase == .processing, !event.beginsTurn {
             // `Stop` already ended the turn. Events that merely report something
@@ -158,6 +159,21 @@ actor SessionStore {
             session.phase = newPhase
         } else {
             Self.logger.debug("Invalid transition: \(String(describing: session.phase), privacy: .public) -> \(String(describing: newPhase), privacy: .public), ignoring")
+        }
+
+        // Clock the turn: start on the way into a running phase, stop on the way
+        // out. An approval pause keeps the clock going — the turn is still open.
+        if session.phase.isRunningTurn {
+            if !wasRunning || session.turnStartedAt == nil {
+                session.turnStartedAt = Date()
+            }
+        } else {
+            // Falling out of a running phase ends the turn — stamp it so the UI
+            // can say how long ago it finished.
+            if wasRunning || session.turnStartedAt != nil {
+                session.turnEndedAt = Date()
+            }
+            session.turnStartedAt = nil
         }
 
         if event.event == "PermissionRequest", let toolUseId = event.toolUseId {

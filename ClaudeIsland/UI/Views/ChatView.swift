@@ -199,10 +199,16 @@ struct ChatView: View {
                     .foregroundColor(.notchFG.opacity(isHeaderHovered ? 1.0 : 0.6))
                     .frame(width: 24, height: 24)
 
-                Text(session.displayTitle)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.notchFG.opacity(isHeaderHovered ? 1.0 : 0.85))
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(session.displayTitle)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.notchFG.opacity(isHeaderHovered ? 1.0 : 0.85))
+                        .lineLimit(1)
+
+                    // Which checkout this session is on, and whether it is still
+                    // working or how long ago it finished.
+                    SessionMetaLine(session: session, showsTiming: true)
+                }
 
                 Spacer()
             }
