@@ -76,23 +76,6 @@ struct NotchView: View {
         runningSession?.turnStartedAt
     }
 
-    /// What that session is doing right now, for the opened header.
-    private var liveActivityText: String? {
-        guard let session = runningSession else { return nil }
-
-        if let pending = session.pendingToolName {
-            return "\(MCPToolFormatter.formatToolName(pending)) needs approval"
-        }
-        if session.phase == .compacting {
-            return "Compacting context"
-        }
-        guard session.lastMessageRole == "tool", let detail = session.lastMessage else {
-            return nil
-        }
-        guard let tool = session.lastToolName else { return detail }
-        return "\(MCPToolFormatter.formatToolName(tool)) \(detail)"
-    }
-
     /// Whether the collapsed pill is showing the elapsed-time readout.
     private var showsElapsedTime: Bool {
         viewModel.status != .opened && runningSince != nil
@@ -350,20 +333,18 @@ struct NotchView: View {
             // Right side - spinner when processing/pending, checkmark when waiting for input
             if showClosedActivity {
                 if isProcessing || hasPendingPermission {
-                    // The clock *replaces* the spinner rather than sitting beside
-                    // it. Anything added to this shoulder pushes the pill further
-                    // over the menu bar icons next to the notch, and a counting
-                    // clock already reads as activity — as do the crab's legs.
-                    Group {
+                    HStack(spacing: 3) {
+                        ProcessingSpinner()
+                            .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
+
                         if showsElapsedTime, let runningSince {
                             ElapsedTimeLabel(since: runningSince, color: pillTimeColor)
-                        } else {
-                            ProcessingSpinner()
+                                .transition(.opacity)
                         }
                     }
-                    .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
-                    // minWidth, so `1:27` costs nothing extra and only an
-                    // hours-long reading widens the shoulder at all.
+                    // minWidth, never a fixed width: a fixed frame here padded the
+                    // shoulder with dead space and pushed the pill over the menu
+                    // bar icons. This way the clock costs ~4pt beside the spinner.
                     .frame(minWidth: viewModel.status == .opened ? 20 : sideWidth, alignment: .trailing)
                     .padding(.trailing, viewModel.status == .opened ? 0 : 4)
                 } else if hasWaitingForInput {
@@ -410,20 +391,7 @@ struct NotchView: View {
                     .padding(.leading, 8)
             }
 
-            // Live activity fills the header's dead space, so what Claude is
-            // doing is visible from any screen of the panel — including the chat
-            // view — without widening the collapsed pill.
-            if let activity = liveActivityText {
-                Text(activity)
-                    .font(.system(size: 11))
-                    .italic()
-                    .foregroundColor(.notchFG.opacity(0.4))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .transition(.opacity)
-            }
-
-            Spacer(minLength: 8)
+            Spacer()
 
             // Menu toggle
             Button {
