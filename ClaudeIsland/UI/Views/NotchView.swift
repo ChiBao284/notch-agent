@@ -350,20 +350,20 @@ struct NotchView: View {
             // Right side - spinner when processing/pending, checkmark when waiting for input
             if showClosedActivity {
                 if isProcessing || hasPendingPermission {
-                    HStack(spacing: 3) {
-                        ProcessingSpinner()
-                            .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
-
-                        // How long this turn has been running. Collapsed only —
-                        // the expanded panel has room to say it per session.
+                    // The clock *replaces* the spinner rather than sitting beside
+                    // it. Anything added to this shoulder pushes the pill further
+                    // over the menu bar icons next to the notch, and a counting
+                    // clock already reads as activity — as do the crab's legs.
+                    Group {
                         if showsElapsedTime, let runningSince {
                             ElapsedTimeLabel(since: runningSince, color: pillTimeColor)
-                                .transition(.opacity)
+                        } else {
+                            ProcessingSpinner()
                         }
                     }
-                    // Sized to its content, not a fixed width: padding the group
-                    // out to a fixed size grew the pill past the notch shoulder
-                    // and covered the menu bar icons beside it.
+                    .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
+                    // minWidth, so `1:27` costs nothing extra and only an
+                    // hours-long reading widens the shoulder at all.
                     .frame(minWidth: viewModel.status == .opened ? 20 : sideWidth, alignment: .trailing)
                     .padding(.trailing, viewModel.status == .opened ? 0 : 4)
                 } else if hasWaitingForInput {

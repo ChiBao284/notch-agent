@@ -245,7 +245,11 @@ struct InstanceRow: View {
             }
             return detail
         }
-        return session.lastAssistantMessage ?? phaseStatusText
+
+        // Claude is writing prose, so there is no tool to name. Report the phase
+        // rather than the previous reply — a reply that is already on screen looks
+        // frozen, which is exactly the "text never updates" complaint.
+        return phaseStatusText
     }
 
     /// Status text based on session phase (fallback when no other content)
