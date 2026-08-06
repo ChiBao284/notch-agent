@@ -8,7 +8,6 @@
 
 import Combine
 import Foundation
-import Mixpanel
 import os.log
 
 /// Central state manager for all Claude sessions
@@ -128,7 +127,7 @@ actor SessionStore {
 
         // Track new session in Mixpanel
         if isNewSession {
-            Mixpanel.mainInstance().track(event: "Session Started")
+            Analytics.track("Session Started")
         }
 
         session.pid = event.pid
@@ -149,7 +148,13 @@ actor SessionStore {
 
         let newPhase = event.determinePhase()
 
-        if session.phase.canTransition(to: newPhase) {
+        if session.phase == .waitingForInput, newPhase == .processing, !event.beginsTurn {
+            // `Stop` already ended the turn. Events that merely report something
+            // finished still carry status "processing", so letting them through
+            // would restart the spinner with nothing left to end it — `Stop`
+            // does not fire twice. Only a new prompt reopens a turn.
+            Self.logger.debug("Ignoring trailing \(event.event, privacy: .public) — turn already ended")
+        } else if session.phase.canTransition(to: newPhase) {
             session.phase = newPhase
         } else {
             Self.logger.debug("Invalid transition: \(String(describing: session.phase), privacy: .public) -> \(String(describing: newPhase), privacy: .public), ignoring")
@@ -183,6 +188,7 @@ actor SessionStore {
             pid: event.pid,
             tty: event.tty?.replacingOccurrences(of: "/dev/", with: ""),
             isInTmux: false,  // Will be updated
+            gitBranch: GitRepository.currentBranch(at: event.cwd),
             phase: .idle
         )
     }
@@ -1070,13 +1076,13 @@ actor SessionStore {
 
     /// Recheck status of all active sessions
     private func recheckAllSessions() {
-        var removedSession = false
+        var needsPublish = false
 
         for (sessionId, session) in Array(sessions) {
             if session.phase == .ended {
                 sessions.removeValue(forKey: sessionId)
                 cancelPendingSync(sessionId: sessionId)
-                removedSession = true
+                needsPublish = true
                 continue
             }
 
@@ -1086,9 +1092,17 @@ actor SessionStore {
                     Self.logger.info("Process \(pid) no longer running, ending session \(sessionId.prefix(8))")
                     sessions.removeValue(forKey: sessionId)
                     cancelPendingSync(sessionId: sessionId)
-                    removedSession = true
+                    needsPublish = true
                     continue
                 }
+            }
+
+            // The branch changes under us when the user switches; re-reading a
+            // one-line file per tick is cheap enough to just do it.
+            let branch = GitRepository.currentBranch(at: session.cwd)
+            if branch != session.gitBranch {
+                sessions[sessionId]?.gitBranch = branch
+                needsPublish = true
             }
 
             let needsSync: Bool
@@ -1103,7 +1117,7 @@ actor SessionStore {
             }
         }
 
-        if removedSession {
+        if needsPublish {
             publishState()
         }
     }

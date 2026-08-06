@@ -26,11 +26,11 @@ struct ClaudeInstancesView: View {
         VStack(spacing: 8) {
             Text("No sessions")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(.notchFG.opacity(0.4))
 
             Text("Run claude in terminal")
                 .font(.system(size: 11))
-                .foregroundColor(.white.opacity(0.25))
+                .foregroundColor(.notchFG.opacity(0.25))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -88,14 +88,8 @@ struct ClaudeInstancesView: View {
     // MARK: - Actions
 
     private func focusSession(_ session: SessionState) {
-        guard session.isInTmux else { return }
-
         Task {
-            if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forClaudePid: pid)
-            } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
-            }
+            await TerminalFocuser.focus(session: session)
         }
     }
 
@@ -128,9 +122,14 @@ struct InstanceRow: View {
 
     @State private var isHovered = false
     @State private var spinnerPhase = 0
-    @State private var isYabaiAvailable = false
 
-    private let claudeOrange = Color(red: 0.85, green: 0.47, blue: 0.34)
+    /// Whether we can identify a window to raise for this session. No longer
+    /// requires yabai — see `TerminalFocuser`.
+    private var canFocusTerminal: Bool {
+        session.pid != nil || session.isInTmux
+    }
+
+    private let claudeOrange = TerminalColors.claudeOrange
     private let spinnerSymbols = ["·", "✢", "✳", "∗", "✻", "✽"]
     private let spinnerTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
 
@@ -143,6 +142,21 @@ struct InstanceRow: View {
     private var isInteractiveTool: Bool {
         guard let toolName = session.pendingToolName else { return false }
         return toolName == "AskUserQuestion"
+    }
+
+    /// The prompt the user last sent, unless it is already the row title.
+    ///
+    /// Without a summary the title *is* the first prompt, so on a session with a
+    /// single message both lines would print the same sentence.
+    private var myLastMessage: String? {
+        guard let message = session.lastUserMessage else { return nil }
+
+        if session.summary == nil, let first = session.firstUserMessage {
+            let stem = first.hasSuffix("...") ? String(first.dropLast(3)) : first
+            if !stem.isEmpty && message.hasPrefix(stem) { return nil }
+        }
+
+        return message
     }
 
     /// Status text based on session phase (fallback when no other content)
@@ -174,16 +188,45 @@ struct InstanceRow: View {
                 HStack(spacing: 6) {
                     Text(session.displayTitle)
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white)
+                        .foregroundColor(.notchFG)
                         .lineLimit(1)
 
                     // Token usage indicator
                     if session.usage.totalTokens > 0 {
                         Text(session.usage.formattedTotal)
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.3))
+                            .foregroundColor(.notchFG.opacity(0.3))
                     }
                 }
+
+                // Project + branch — what tells two sessions apart when several
+                // repos (or worktrees of one repo) are running at once.
+                HStack(spacing: 6) {
+                    Label {
+                        Text(session.projectName)
+                            .font(.system(size: 10, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } icon: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 9))
+                    }
+                    .foregroundColor(.notchFG.opacity(0.45))
+
+                    if let branch = session.gitBranch {
+                        Label {
+                            Text(branch)
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        } icon: {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.system(size: 9))
+                        }
+                        .foregroundColor(TerminalColors.prompt.opacity(0.8))
+                    }
+                }
+                .labelStyle(.titleAndIcon)
 
                 // Show tool call when waiting for approval, otherwise last activity
                 if isWaitingForApproval, let toolName = session.pendingToolName {
@@ -195,64 +238,32 @@ struct InstanceRow: View {
                         if isInteractiveTool {
                             Text("Needs your input")
                                 .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.5))
+                                .foregroundColor(.notchFG.opacity(0.5))
                                 .lineLimit(1)
                         } else if let input = session.pendingToolInput {
                             Text(input)
                                 .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.5))
+                                .foregroundColor(.notchFG.opacity(0.5))
                                 .lineLimit(1)
                         }
                     }
-                } else if let role = session.lastMessageRole {
-                    switch role {
-                    case "tool":
-                        // Tool call - show tool name + input
-                        HStack(spacing: 4) {
-                            if let toolName = session.lastToolName {
-                                Text(MCPToolFormatter.formatToolName(toolName))
-                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.5))
-                            }
-                            if let input = session.lastMessage {
-                                Text(input)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.white.opacity(0.4))
-                                    .lineLimit(1)
-                            }
-                        }
-                    case "user":
-                        // User message - prefix with "You:"
-                        HStack(spacing: 4) {
-                            Text("You:")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.white.opacity(0.5))
-                            if let msg = session.lastMessage {
-                                Text(msg)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.white.opacity(0.4))
-                                    .lineLimit(1)
-                            }
-                        }
-                    default:
-                        // Assistant message - just show text
-                        if let msg = session.lastMessage {
-                            Text(msg)
-                                .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.4))
-                                .lineLimit(1)
-                        }
+                } else if let myMessage = myLastMessage {
+                    // The prompt you last sent — what you asked for reads as more
+                    // useful context here than whatever Claude last emitted.
+                    HStack(spacing: 4) {
+                        Text("You:")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.notchFG.opacity(0.5))
+                        Text(myMessage)
+                            .font(.system(size: 11))
+                            .foregroundColor(.notchFG.opacity(0.4))
+                            .lineLimit(1)
                     }
-                } else if let lastMsg = session.lastMessage {
-                    Text(lastMsg)
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
-                        .lineLimit(1)
                 } else {
                     // Fallback: show phase-based status when no other content
                     Text(phaseStatusText)
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(.notchFG.opacity(0.4))
                         .lineLimit(1)
                 }
             }
@@ -267,10 +278,10 @@ struct InstanceRow: View {
                         onChat()
                     }
 
-                    // Go to Terminal button (only if yabai available)
-                    if isYabaiAvailable {
+                    // Go to Terminal button
+                    if canFocusTerminal {
                         TerminalButton(
-                            isEnabled: session.isInTmux,
+                            isEnabled: true,
                             onTap: { onFocus() }
                         )
                     }
@@ -290,8 +301,8 @@ struct InstanceRow: View {
                         onChat()
                     }
 
-                    // Focus icon (only for tmux instances with yabai)
-                    if session.isInTmux && isYabaiAvailable {
+                    // Focus icon - raises the terminal running this session
+                    if canFocusTerminal {
                         IconButton(icon: "eye") {
                             onFocus()
                         }
@@ -317,12 +328,9 @@ struct InstanceRow: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isWaitingForApproval)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
+                .fill(isHovered ? Color.notchFG.opacity(0.06) : Color.clear)
         )
         .onHover { isHovered = $0 }
-        .task {
-            isYabaiAvailable = await WindowFinder.shared.isYabaiAvailable()
-        }
     }
 
     @ViewBuilder
@@ -348,7 +356,7 @@ struct InstanceRow: View {
                 .frame(width: 6, height: 6)
         case .idle, .ended:
             Circle()
-                .fill(Color.white.opacity(0.2))
+                .fill(Color.notchFG.opacity(0.2))
                 .frame(width: 6, height: 6)
         }
     }
@@ -381,10 +389,10 @@ struct InlineApprovalButtons: View {
             } label: {
                 Text("Deny")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(.notchFG.opacity(0.6))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(Color.white.opacity(0.1))
+                    .background(Color.notchFG.opacity(0.1))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -396,10 +404,10 @@ struct InlineApprovalButtons: View {
             } label: {
                 Text("Allow")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.black)
+                    .foregroundColor(.notchFGInverted)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(Color.white.opacity(0.9))
+                    .background(Color.notchFG.opacity(0.9))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -434,11 +442,11 @@ struct IconButton: View {
         } label: {
             Image(systemName: icon)
                 .font(.system(size: 11, weight: .medium))
-                .foregroundColor(isHovered ? .white.opacity(0.8) : .white.opacity(0.4))
+                .foregroundColor(isHovered ? .notchFG.opacity(0.8) : .notchFG.opacity(0.4))
                 .frame(width: 24, height: 24)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(isHovered ? Color.white.opacity(0.1) : Color.clear)
+                        .fill(isHovered ? Color.notchFG.opacity(0.1) : Color.clear)
                 )
         }
         .buttonStyle(.plain)
@@ -464,10 +472,10 @@ struct CompactTerminalButton: View {
                 Text("Go to Terminal")
                     .font(.system(size: 10, weight: .medium))
             }
-            .foregroundColor(isEnabled ? .white.opacity(0.9) : .white.opacity(0.3))
+            .foregroundColor(isEnabled ? .notchFG.opacity(0.9) : .notchFG.opacity(0.3))
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(isEnabled ? Color.white.opacity(0.15) : Color.white.opacity(0.05))
+            .background(isEnabled ? Color.notchFG.opacity(0.15) : Color.notchFG.opacity(0.05))
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -492,10 +500,10 @@ struct TerminalButton: View {
                 Text("Terminal")
                     .font(.system(size: 11, weight: .medium))
             }
-            .foregroundColor(isEnabled ? .black : .white.opacity(0.4))
+            .foregroundColor(isEnabled ? .notchFGInverted : .notchFG.opacity(0.4))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(isEnabled ? Color.white.opacity(0.95) : Color.white.opacity(0.1))
+            .background(isEnabled ? Color.notchFG.opacity(0.95) : Color.notchFG.opacity(0.1))
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)

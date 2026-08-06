@@ -1,24 +1,22 @@
 //
-//  SoundPickerRow.swift
+//  ThemePickerRow.swift
 //  ClaudeIsland
 //
-//  Notification sound selection picker for settings menu
+//  Appearance (system / dark / light) picker for the settings menu
 //
 
-import AppKit
 import SwiftUI
 
-struct SoundPickerRow: View {
-    @ObservedObject var soundSelector: SoundSelector
+struct ThemePickerRow: View {
+    @ObservedObject var themeManager: ThemeManager
     @State private var isHovered = false
-    @State private var selectedSound: NotificationSound = AppSettings.notificationSound
 
     private var isExpanded: Bool {
-        soundSelector.isPickerExpanded
+        themeManager.isPickerExpanded
     }
 
     private func setExpanded(_ value: Bool) {
-        soundSelector.isPickerExpanded = value
+        themeManager.isPickerExpanded = value
     }
 
     var body: some View {
@@ -30,18 +28,18 @@ struct SoundPickerRow: View {
                 }
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "speaker.wave.2")
+                    Image(systemName: themeManager.mode.icon)
                         .font(.system(size: 12))
                         .foregroundColor(textColor)
                         .frame(width: 16)
 
-                    Text("Notification Sound")
+                    Text("Appearance")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(textColor)
 
                     Spacer()
 
-                    Text(selectedSound.rawValue)
+                    Text(themeManager.mode.label)
                         .font(.system(size: 11))
                         .foregroundColor(.notchFG.opacity(0.4))
                         .lineLimit(1)
@@ -60,32 +58,21 @@ struct SoundPickerRow: View {
             .buttonStyle(.plain)
             .onHover { isHovered = $0 }
 
-            // Expanded sound list
+            // Expanded mode list
             if isExpanded {
-                ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(NotificationSound.allCases, id: \.self) { sound in
-                            SoundOptionRowInline(
-                                sound: sound,
-                                isSelected: selectedSound == sound
-                            ) {
-                                // Play preview sound
-                                if let soundName = sound.soundName {
-                                    NSSound(named: soundName)?.play()
-                                }
-                                selectedSound = sound
-                                AppSettings.notificationSound = sound
-                            }
+                VStack(spacing: 2) {
+                    ForEach(AppThemeMode.allCases, id: \.self) { mode in
+                        ThemeOptionRow(
+                            mode: mode,
+                            isSelected: themeManager.mode == mode
+                        ) {
+                            themeManager.select(mode)
                         }
                     }
                 }
-                .frame(maxHeight: CGFloat(min(NotificationSound.allCases.count, 6)) * 32)
                 .padding(.leading, 28)
                 .padding(.top, 4)
             }
-        }
-        .onAppear {
-            selectedSound = AppSettings.notificationSound
         }
     }
 
@@ -94,10 +81,10 @@ struct SoundPickerRow: View {
     }
 }
 
-// MARK: - Sound Option Row (Inline version)
+// MARK: - Theme Option Row
 
-private struct SoundOptionRowInline: View {
-    let sound: NotificationSound
+private struct ThemeOptionRow: View {
+    let mode: AppThemeMode
     let isSelected: Bool
     let action: () -> Void
 
@@ -110,7 +97,12 @@ private struct SoundOptionRowInline: View {
                     .fill(isSelected ? TerminalColors.green : Color.notchFG.opacity(0.2))
                     .frame(width: 6, height: 6)
 
-                Text(sound.rawValue)
+                Image(systemName: mode.icon)
+                    .font(.system(size: 10))
+                    .foregroundColor(.notchFG.opacity(isHovered ? 0.8 : 0.5))
+                    .frame(width: 12)
+
+                Text(mode.label)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.notchFG.opacity(isHovered ? 1.0 : 0.7))
 

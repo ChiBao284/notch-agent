@@ -24,6 +24,11 @@ struct ChatView: View {
     @State private var newMessageCount: Int = 0
     @State private var previousHistoryCount: Int = 0
     @State private var isBottomVisible: Bool = true
+    /// How a typed message can reach this session — resolved asynchronously
+    /// because it depends on tmux and the running terminal apps.
+    @State private var channel: MessageChannel = .resolving
+    /// Why the last send failed, surfaced above the composer.
+    @State private var sendError: String?
     @FocusState private var isInputFocused: Bool
 
     init(sessionId: String, initialSession: SessionState, sessionMonitor: ClaudeSessionMonitor, viewModel: NotchViewModel) {
@@ -168,12 +173,15 @@ struct ChatView: View {
             }
         }
         .onAppear {
-            // Auto-focus input when chat opens and tmux messaging is available
+            // Auto-focus input when chat opens and messaging is available
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 if canSendMessages {
                     isInputFocused = true
                 }
             }
+        }
+        .task(id: session.stableId) {
+            await refreshChannel()
         }
     }
 
@@ -188,12 +196,12 @@ struct ChatView: View {
             HStack(spacing: 8) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white.opacity(isHeaderHovered ? 1.0 : 0.6))
+                    .foregroundColor(.notchFG.opacity(isHeaderHovered ? 1.0 : 0.6))
                     .frame(width: 24, height: 24)
 
                 Text(session.displayTitle)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white.opacity(isHeaderHovered ? 1.0 : 0.85))
+                    .foregroundColor(.notchFG.opacity(isHeaderHovered ? 1.0 : 0.85))
                     .lineLimit(1)
 
                 Spacer()
@@ -202,14 +210,14 @@ struct ChatView: View {
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(isHeaderHovered ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(isHeaderHovered ? Color.notchFG.opacity(0.08) : Color.clear)
             )
         }
         .buttonStyle(.plain)
         .onHover { isHeaderHovered = $0 }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color.black.opacity(0.2))
+        .background(Color.notchBar)
         .overlay(alignment: .bottom) {
             LinearGradient(
                 colors: [fadeColor.opacity(0.7), fadeColor.opacity(0)],
@@ -243,11 +251,11 @@ struct ChatView: View {
     private var loadingState: some View {
         VStack(spacing: 8) {
             ProgressView()
-                .progressViewStyle(CircularProgressViewStyle(tint: .white.opacity(0.4)))
+                .progressViewStyle(CircularProgressViewStyle(tint: .notchFG.opacity(0.4)))
                 .scaleEffect(0.8)
             Text("Loading messages...")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(.notchFG.opacity(0.4))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -258,18 +266,18 @@ struct ChatView: View {
         VStack(spacing: 8) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 24))
-                .foregroundColor(.white.opacity(0.2))
+                .foregroundColor(.notchFG.opacity(0.2))
             Text("No messages yet")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.4))
+                .foregroundColor(.notchFG.opacity(0.4))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - Message List
 
-    /// Background color for fade gradients
-    private let fadeColor = Color(red: 0.00, green: 0.00, blue: 0.00)
+    /// Background color for fade gradients — matches the panel body.
+    private let fadeColor = Color.notchPanel
 
     private var messageList: some View {
         ScrollViewReader { proxy in
@@ -353,46 +361,63 @@ struct ChatView: View {
 
     // MARK: - Input Bar
 
-    /// Can send messages only if session is in tmux
+    /// Whether a delivery channel to this session is available.
     private var canSendMessages: Bool {
-        session.isInTmux && session.tty != nil
+        channel.canSend
     }
 
     private var inputBar: some View {
-        HStack(spacing: 10) {
-            TextField(canSendMessages ? "Message Claude..." : "Open Claude Code in tmux to enable messaging", text: $inputText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundColor(canSendMessages ? .white : .white.opacity(0.4))
-                .focused($isInputFocused)
-                .disabled(!canSendMessages)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(Color.white.opacity(canSendMessages ? 0.08 : 0.04))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20)
-                                .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-                        )
-                )
-                .onSubmit {
-                    sendMessage()
+        VStack(spacing: 6) {
+            // Why the last send did not land. Shown here rather than blocking the
+            // field, so composing never depends on a channel being resolved.
+            if let sendError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                    Text(sendError)
+                        .font(.system(size: 11))
+                        .lineLimit(2)
+                    Spacer()
                 }
-
-            Button {
-                sendMessage()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundColor(!canSendMessages || inputText.isEmpty ? .white.opacity(0.2) : .white.opacity(0.9))
+                .foregroundColor(TerminalColors.amber)
+                .transition(.opacity)
             }
-            .buttonStyle(.plain)
-            .disabled(!canSendMessages || inputText.isEmpty)
+
+            HStack(spacing: 10) {
+                TextField(channel.placeholder, text: $inputText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundColor(.notchFG)
+                    .focused($isInputFocused)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(Color.notchFG.opacity(0.08))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20)
+                                    .strokeBorder(Color.notchFG.opacity(0.1), lineWidth: 1)
+                            )
+                    )
+                    .onSubmit {
+                        sendMessage()
+                    }
+
+                Button {
+                    sendMessage()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundColor(inputText.isEmpty ? .notchFG.opacity(0.2) : .notchFG.opacity(0.9))
+                }
+                .buttonStyle(.plain)
+                .disabled(inputText.isEmpty)
+            }
         }
+        .animation(.easeOut(duration: 0.2), value: sendError)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color.black.opacity(0.2))
+        .background(Color.notchBar)
         .overlay(alignment: .top) {
             LinearGradient(
                 colors: [fadeColor.opacity(0), fadeColor.opacity(0.7)],
@@ -422,7 +447,7 @@ struct ChatView: View {
     /// Bar for interactive tools like AskUserQuestion that need terminal input
     private var interactivePromptBar: some View {
         ChatInteractivePromptBar(
-            isInTmux: session.isInTmux,
+            canFocusTerminal: session.pid != nil || session.isInTmux,
             onGoToTerminal: { focusTerminal() }
         )
     }
@@ -446,11 +471,7 @@ struct ChatView: View {
 
     private func focusTerminal() {
         Task {
-            if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forClaudePid: pid)
-            } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
-            }
+            await TerminalFocuser.focus(session: session)
         }
     }
 
@@ -474,47 +495,28 @@ struct ChatView: View {
 
         // Don't add to history here - it will be synced from JSONL when UserPromptSubmit event fires
         Task {
-            await sendToSession(text)
-        }
-    }
+            let delivered = await MessageSender.send(text, to: session)
+            let resolved = await MessageSender.resolveChannel(for: session)
 
-    private func sendToSession(_ text: String) async {
-        guard session.isInTmux else { return }
-        guard let tty = session.tty else { return }
-
-        if let target = await findTmuxTarget(tty: tty) {
-            _ = await ToolApprovalHandler.shared.sendMessage(text, to: target)
-        }
-    }
-
-    private func findTmuxTarget(tty: String) async -> TmuxTarget? {
-        guard let tmuxPath = await TmuxPathFinder.shared.getTmuxPath() else {
-            return nil
-        }
-
-        do {
-            let output = try await ProcessExecutor.shared.run(
-                tmuxPath,
-                arguments: ["list-panes", "-a", "-F", "#{session_name}:#{window_index}.#{pane_index} #{pane_tty}"]
-            )
-
-            let lines = output.components(separatedBy: "\n")
-            for line in lines {
-                let parts = line.components(separatedBy: " ")
-                guard parts.count >= 2 else { continue }
-
-                let target = parts[0]
-                let paneTty = parts[1].replacingOccurrences(of: "/dev/", with: "")
-
-                if paneTty == tty {
-                    return TmuxTarget(from: target)
+            await MainActor.run {
+                channel = resolved
+                if delivered {
+                    sendError = nil
+                } else {
+                    // Hand the text back rather than losing it, and say why.
+                    if inputText.isEmpty { inputText = text }
+                    sendError = resolved.failureExplanation
                 }
             }
-        } catch {
-            return nil
         }
+    }
 
-        return nil
+    /// Re-resolve how messages reach this session.
+    private func refreshChannel() async {
+        let resolved = await MessageSender.resolveChannel(for: session)
+        await MainActor.run {
+            channel = resolved
+        }
     }
 }
 
@@ -564,7 +566,7 @@ struct ImageMessageView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                            .stroke(Color.notchFG.opacity(0.1), lineWidth: 1)
                     )
             } else {
                 // Decode failed — show a labelled placeholder rather than silently dropping
@@ -574,12 +576,12 @@ struct ImageMessageView: View {
                     Text("Image (\(image.mediaType))")
                         .font(.system(size: 12))
                 }
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundColor(.notchFG.opacity(0.5))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.white.opacity(0.08))
+                        .fill(Color.notchFG.opacity(0.08))
                 )
             }
         }
@@ -604,12 +606,12 @@ struct UserMessageView: View {
         HStack {
             Spacer(minLength: 60)
 
-            MarkdownText(text, color: .white, fontSize: 13)
+            MarkdownText(text, color: .notchFG, fontSize: 13)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 18)
-                        .fill(Color.white.opacity(0.15))
+                        .fill(Color.notchFG.opacity(0.15))
                 )
         }
     }
@@ -629,11 +631,11 @@ struct AssistantMessageView: View {
             HStack(alignment: .top, spacing: 6) {
                 // White dot indicator
                 Circle()
-                    .fill(Color.white.opacity(0.6))
+                    .fill(Color.notchFG.opacity(0.6))
                     .frame(width: 6, height: 6)
                     .padding(.top, 5)
 
-                MarkdownText(text, color: .white.opacity(0.9), fontSize: 13)
+                MarkdownText(text, color: .notchFG.opacity(0.9), fontSize: 13)
 
                 Spacer(minLength: 60)
             }
@@ -645,7 +647,7 @@ struct AssistantMessageView: View {
 
 struct ProcessingIndicatorView: View {
     private let baseTexts = ["Processing", "Working"]
-    private let color = Color(red: 0.85, green: 0.47, blue: 0.34) // Claude orange
+    private let color = TerminalColors.claudeOrange
     private let baseText: String
 
     @State private var dotCount: Int = 1
@@ -692,7 +694,7 @@ struct ToolCallView: View {
     private var statusColor: Color {
         switch tool.status {
         case .running:
-            return Color.white
+            return Color.notchFG
         case .waitingForApproval:
             return Color.orange
         case .success:
@@ -705,11 +707,11 @@ struct ToolCallView: View {
     private var textColor: Color {
         switch tool.status {
         case .running:
-            return .white.opacity(0.6)
+            return .notchFG.opacity(0.6)
         case .waitingForApproval:
             return Color.orange.opacity(0.9)
         case .success:
-            return .white.opacity(0.7)
+            return .notchFG.opacity(0.7)
         case .error, .interrupted:
             return Color.red.opacity(0.8)
         }
@@ -790,7 +792,7 @@ struct ToolCallView: View {
                 if canExpand && tool.status != .running && tool.status != .waitingForApproval {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.white.opacity(0.3))
+                        .foregroundColor(.notchFG.opacity(0.3))
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isExpanded)
                 }
@@ -822,7 +824,7 @@ struct ToolCallView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(canExpand && isHovering ? Color.white.opacity(0.05) : Color.clear)
+                .fill(canExpand && isHovering ? Color.notchFG.opacity(0.05) : Color.clear)
         )
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -871,7 +873,7 @@ struct SubagentToolsList: View {
             if hiddenCount > 0 {
                 Text("+\(hiddenCount) more tool uses")
                     .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.4))
+                    .foregroundColor(.notchFG.opacity(0.4))
             }
 
             // Show last 2 tools (most recent activity)
@@ -927,12 +929,12 @@ struct SubagentToolRow: View {
             // Tool name
             Text(tool.name)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(.notchFG.opacity(0.6))
 
             // Status text (same format as regular tools)
             Text(statusText)
                 .font(.system(size: 10))
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundColor(.notchFG.opacity(0.5))
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -955,17 +957,17 @@ struct SubagentToolsSummary: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Subagent used \(tools.count) tools:")
                 .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundColor(.notchFG.opacity(0.5))
 
             HStack(spacing: 8) {
                 ForEach(toolCounts.prefix(5), id: \.0) { name, count in
                     HStack(spacing: 2) {
                         Text(name)
                             .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.4))
+                            .foregroundColor(.notchFG.opacity(0.4))
                         Text("×\(count)")
                             .font(.system(size: 9, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.3))
+                            .foregroundColor(.notchFG.opacity(0.3))
                     }
                 }
             }
@@ -974,7 +976,7 @@ struct SubagentToolsSummary: View {
         .padding(.horizontal, 8)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color.white.opacity(0.03))
+                .fill(Color.notchFG.opacity(0.03))
         )
     }
 }
@@ -1050,7 +1052,9 @@ struct InterruptedMessageView: View {
 
 /// Bar for interactive tools like AskUserQuestion that need terminal input
 struct ChatInteractivePromptBar: View {
-    let isInTmux: Bool
+    /// Whether we know which window to raise. Focusing no longer needs tmux —
+    /// see `TerminalFocuser` — just an identifiable owning process.
+    let canFocusTerminal: Bool
     let onGoToTerminal: () -> Void
 
     @State private var showContent = false
@@ -1065,7 +1069,7 @@ struct ChatInteractivePromptBar: View {
                     .foregroundColor(TerminalColors.amber)
                 Text("Claude Code needs your input")
                     .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundColor(.notchFG.opacity(0.5))
                     .lineLimit(1)
             }
             .opacity(showContent ? 1 : 0)
@@ -1075,7 +1079,7 @@ struct ChatInteractivePromptBar: View {
 
             // Terminal button on right (similar to Allow button)
             Button {
-                if isInTmux {
+                if canFocusTerminal {
                     onGoToTerminal()
                 }
             } label: {
@@ -1085,10 +1089,10 @@ struct ChatInteractivePromptBar: View {
                     Text("Terminal")
                         .font(.system(size: 13, weight: .medium))
                 }
-                .foregroundColor(isInTmux ? .black : .white.opacity(0.4))
+                .foregroundColor(canFocusTerminal ? .notchFGInverted : .notchFG.opacity(0.4))
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(isInTmux ? Color.white.opacity(0.95) : Color.white.opacity(0.1))
+                .background(canFocusTerminal ? Color.notchFG.opacity(0.95) : Color.notchFG.opacity(0.1))
                 .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -1098,7 +1102,7 @@ struct ChatInteractivePromptBar: View {
         .frame(minHeight: 44)  // Consistent height with other bars
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color.black.opacity(0.2))
+        .background(Color.notchBar)
         .onAppear {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.05)) {
                 showContent = true
@@ -1133,7 +1137,7 @@ struct ChatApprovalBar: View {
                 if let input = toolInput {
                     Text(input)
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.5))
+                        .foregroundColor(.notchFG.opacity(0.5))
                         .lineLimit(1)
                 }
             }
@@ -1148,10 +1152,10 @@ struct ChatApprovalBar: View {
             } label: {
                 Text("Deny")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(.notchFG.opacity(0.7))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.1))
+                    .background(Color.notchFG.opacity(0.1))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -1164,10 +1168,10 @@ struct ChatApprovalBar: View {
             } label: {
                 Text("Allow")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.black)
+                    .foregroundColor(.notchFGInverted)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.95))
+                    .background(Color.notchFG.opacity(0.95))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -1177,7 +1181,7 @@ struct ChatApprovalBar: View {
         .frame(minHeight: 44)  // Consistent height with other bars
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color.black.opacity(0.2))
+        .background(Color.notchBar)
         .onAppear {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.05)) {
                 showContent = true
@@ -1215,7 +1219,7 @@ struct NewMessagesIndicator: View {
             .padding(.vertical, 8)
             .background(
                 Capsule()
-                    .fill(Color(red: 0.85, green: 0.47, blue: 0.34)) // Claude orange
+                    .fill(TerminalColors.claudeOrange)
                     .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
             )
             .scaleEffect(isHovering ? 1.05 : 1.0)

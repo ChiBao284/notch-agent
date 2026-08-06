@@ -40,19 +40,19 @@ struct ClaudeDirPickerRow: View {
 
                     Text(displayValue)
                         .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(.notchFG.opacity(0.4))
                         .lineLimit(1)
                         .truncationMode(.middle)
 
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 10))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(.notchFG.opacity(0.4))
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(isHovered ? Color.white.opacity(0.08) : Color.clear)
+                        .fill(isHovered ? Color.notchFG.opacity(0.08) : Color.clear)
                 )
             }
             .buttonStyle(.plain)
@@ -87,7 +87,7 @@ struct ClaudeDirPickerRow: View {
     // MARK: - Presentation
 
     private var textColor: Color {
-        .white.opacity(isHovered ? 1.0 : 0.7)
+        .notchFG.opacity(isHovered ? 1.0 : 0.7)
     }
 
     private var isCustom: Bool {
@@ -168,17 +168,17 @@ private struct ClaudeDirOptionRow: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(isSelected ? TerminalColors.green : Color.white.opacity(0.2))
+                    .fill(isSelected ? TerminalColors.green : Color.notchFG.opacity(0.2))
                     .frame(width: 6, height: 6)
 
                 Text(label)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(isHovered ? 1.0 : 0.7))
+                    .foregroundColor(.notchFG.opacity(isHovered ? 1.0 : 0.7))
 
                 if let sublabel {
                     Text(sublabel)
                         .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.35))
+                        .foregroundColor(.notchFG.opacity(0.35))
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -195,7 +195,7 @@ private struct ClaudeDirOptionRow: View {
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
+                    .fill(isHovered ? Color.notchFG.opacity(0.06) : Color.clear)
             )
         }
         .buttonStyle(.plain)

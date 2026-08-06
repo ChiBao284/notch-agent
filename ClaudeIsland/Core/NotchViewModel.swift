@@ -51,6 +51,7 @@ class NotchViewModel: ObservableObject {
     private let screenSelector = ScreenSelector.shared
     private let soundSelector = SoundSelector.shared
     private let claudeDirSelector = ClaudeDirSelector.shared
+    private let themeManager = ThemeManager.shared
 
     // MARK: - Geometry
 
@@ -72,20 +73,23 @@ class NotchViewModel: ObservableObject {
                 height: 580
             )
         case .menu:
-            // Base height covers all static rows (Back, 3 picker rows, 3 toggles,
+            // Base height covers all static rows (Back, 4 picker rows, 3 toggles,
             // Accessibility, Update, GitHub, Quit + 4 dividers + padding).
             // Picker expansion deltas added on top when expanded.
             return CGSize(
                 width: min(screenRect.width * 0.4, 480),
-                height: 540
+                height: 584
+                    + themeManager.expandedPickerHeight
                     + screenSelector.expandedPickerHeight
                     + soundSelector.expandedPickerHeight
                     + claudeDirSelector.expandedPickerHeight
             )
         case .instances:
+            // Rows carry three lines now (title, project/branch, last prompt),
+            // so give the list back the height that third line costs.
             return CGSize(
                 width: min(screenRect.width * 0.4, 480),
-                height: 320
+                height: 360
             )
         }
     }
@@ -125,6 +129,10 @@ class NotchViewModel: ObservableObject {
             .store(in: &cancellables)
 
         claudeDirSelector.$isPickerExpanded
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
+        themeManager.$isPickerExpanded
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
     }

@@ -52,6 +52,25 @@ struct TerminalAppRegistry: Sendable {
         "dev.zed.Zed"
     ]
 
+    /// Editors that embed a terminal pane.
+    ///
+    /// Their frontmost window is usually the editor, not the shell, so synthetic
+    /// keystrokes aimed at a Claude Code session could land in a source file.
+    /// Message delivery therefore refuses to type into these.
+    static let editorBundleIdentifiers: Set<String> = [
+        "com.microsoft.VSCode",
+        "com.microsoft.VSCodeInsiders",
+        "com.todesktop.230313mzl4w4u92",  // Cursor
+        "com.exafunction.windsurf",
+        "dev.zed.Zed"
+    ]
+
+    /// Whether synthetic keystrokes may be typed into this app.
+    static func acceptsKeystrokeDelivery(bundleId: String?) -> Bool {
+        guard let bundleId else { return false }
+        return !editorBundleIdentifiers.contains(bundleId)
+    }
+
     /// Check if an app name or command path is a known terminal
     static func isTerminal(_ appNameOrCommand: String) -> Bool {
         let lower = appNameOrCommand.lowercased()

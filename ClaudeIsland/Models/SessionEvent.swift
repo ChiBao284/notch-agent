@@ -167,6 +167,18 @@ extension HookEvent {
         event == "PreToolUse" || event == "PostToolUse" || event == "PermissionRequest"
     }
 
+    /// Whether this event marks the start of a new turn.
+    ///
+    /// Only a new prompt does. Completion events — `PostToolUse`,
+    /// `PostToolUseFailure`, `SubagentStart`, `SubagentStop`, `PermissionDenied`
+    /// — also report status `processing`, which is accurate mid-turn but wrong
+    /// once `Stop` has ended the turn. `Stop` never fires a second time, so
+    /// letting a trailing event re-enter `.processing` pins the spinner on
+    /// forever (e.g. a background subagent finishing after Claude replied).
+    nonisolated var beginsTurn: Bool {
+        event == "UserPromptSubmit"
+    }
+
     /// Whether this event should trigger a file sync
     nonisolated var shouldSyncFile: Bool {
         switch event {

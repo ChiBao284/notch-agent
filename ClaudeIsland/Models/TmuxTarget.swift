@@ -8,7 +8,7 @@
 import Foundation
 
 /// Represents a tmux target (session:window.pane)
-struct TmuxTarget: Sendable {
+struct TmuxTarget: Sendable, Equatable {
     let session: String
     let window: String
     let pane: String

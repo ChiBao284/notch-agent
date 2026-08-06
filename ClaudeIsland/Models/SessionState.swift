@@ -23,6 +23,9 @@ struct SessionState: Equatable, Identifiable, Sendable {
     var tty: String?
     var isInTmux: Bool
 
+    /// Checked-out branch for `cwd`, refreshed on each status tick.
+    var gitBranch: String?
+
     // MARK: - State Machine
 
     /// Current phase in the session lifecycle
@@ -71,13 +74,15 @@ struct SessionState: Equatable, Identifiable, Sendable {
         pid: Int? = nil,
         tty: String? = nil,
         isInTmux: Bool = false,
+        gitBranch: String? = nil,
         phase: SessionPhase = .idle,
         chatItems: [ChatHistoryItem] = [],
         toolTracker: ToolTracker = ToolTracker(),
         subagentState: SubagentState = SubagentState(),
         conversationInfo: ConversationInfo = ConversationInfo(
             summary: nil, lastMessage: nil, lastMessageRole: nil,
-            lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil
+            lastToolName: nil, firstUserMessage: nil, lastUserMessage: nil,
+            lastUserMessageDate: nil
         ),
         needsClearReconciliation: Bool = false,
         lastActivity: Date = Date(),
@@ -89,6 +94,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.pid = pid
         self.tty = tty
         self.isInTmux = isInTmux
+        self.gitBranch = gitBranch
         self.phase = phase
         self.chatItems = chatItems
         self.toolTracker = toolTracker
@@ -172,6 +178,11 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// First user message
     var firstUserMessage: String? {
         conversationInfo.firstUserMessage
+    }
+
+    /// Text of the most recent message the user sent
+    var lastUserMessage: String? {
+        conversationInfo.lastUserMessage
     }
 
     /// Last user message date

@@ -44,7 +44,7 @@ struct MarkdownText: View {
 
     private let document: Document
 
-    init(_ text: String, color: Color = .white.opacity(0.9), fontSize: CGFloat = 13) {
+    init(_ text: String, color: Color = .notchFG.opacity(0.9), fontSize: CGFloat = 13) {
         self.text = text
         self.baseColor = color
         self.fontSize = fontSize
@@ -256,11 +256,11 @@ private struct CodeBlockView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             SwiftUI.Text(code)
                 .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.white.opacity(0.85))
+                .foregroundColor(.notchFG.opacity(0.85))
                 .padding(10)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.08))
+        .background(Color.notchFG.opacity(0.08))
         .cornerRadius(6)
     }
 }

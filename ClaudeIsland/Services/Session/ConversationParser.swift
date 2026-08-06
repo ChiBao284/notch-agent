@@ -38,6 +38,7 @@ struct ConversationInfo: Equatable {
     let lastMessageRole: String?  // "user", "assistant", or "tool"
     let lastToolName: String?  // Tool name if lastMessageRole is "tool"
     let firstUserMessage: String?  // Fallback title when no summary
+    let lastUserMessage: String?  // Text of the last message the user sent
     let lastUserMessageDate: Date?  // Timestamp of last user message (for stable sorting)
     var usage: UsageInfo = UsageInfo()  // Token usage stats
 }
@@ -110,7 +111,7 @@ actor ConversationParser {
         guard fileManager.fileExists(atPath: sessionFile),
               let attrs = try? fileManager.attributesOfItem(atPath: sessionFile),
               let modDate = attrs[.modificationDate] as? Date else {
-            return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil)
+            return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessage: nil, lastUserMessageDate: nil)
         }
 
         if let cached = cache[sessionFile], cached.modificationDate == modDate {
@@ -119,7 +120,7 @@ actor ConversationParser {
 
         guard let data = fileManager.contents(atPath: sessionFile),
               let content = String(data: data, encoding: .utf8) else {
-            return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessageDate: nil)
+            return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessage: nil, lastUserMessageDate: nil)
         }
 
         let info = parseContent(content)
@@ -137,6 +138,7 @@ actor ConversationParser {
         var lastMessageRole: String?
         var lastToolName: String?
         var firstUserMessage: String?
+        var lastUserMessage: String?
         var lastUserMessageDate: Date?
         var usage = UsageInfo()
 
@@ -222,15 +224,13 @@ actor ConversationParser {
 
             if !foundLastUserMessage && type == "user" {
                 let isMeta = json["isMeta"] as? Bool ?? false
-                if !isMeta, let message = json["message"] as? [String: Any] {
-                    if let msgContent = message["content"] as? String {
-                        if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
-                            if let timestampStr = json["timestamp"] as? String {
-                                lastUserMessageDate = formatter.date(from: timestampStr)
-                            }
-                            foundLastUserMessage = true
-                        }
+                if !isMeta, let message = json["message"] as? [String: Any],
+                   let text = Self.userTypedText(from: message["content"]) {
+                    lastUserMessage = text
+                    if let timestampStr = json["timestamp"] as? String {
+                        lastUserMessageDate = formatter.date(from: timestampStr)
                     }
+                    foundLastUserMessage = true
                 }
             }
 
@@ -249,6 +249,7 @@ actor ConversationParser {
             lastMessageRole: lastMessageRole,
             lastToolName: lastToolName,
             firstUserMessage: firstUserMessage,
+            lastUserMessage: Self.truncateMessage(lastUserMessage, maxLength: 80),
             lastUserMessageDate: lastUserMessageDate,
             usage: usage
         )
@@ -299,6 +300,33 @@ actor ConversationParser {
     }
 
     /// Truncate message for display
+    /// Text of a message the user actually typed, or nil if this is not one.
+    ///
+    /// Skips slash-command envelopes, the session Caveat preamble, and
+    /// `tool_result` payloads — those arrive as `type: "user"` too but are the
+    /// harness talking, not the person.
+    private static func userTypedText(from content: Any?) -> String? {
+        if let text = content as? String {
+            guard !text.hasPrefix("<command-name>"),
+                  !text.hasPrefix("<local-command"),
+                  !text.hasPrefix("Caveat:") else { return nil }
+            return text
+        }
+
+        guard let blocks = content as? [[String: Any]] else { return nil }
+        // A turn carrying a tool result is the harness replying, never the user.
+        guard !blocks.contains(where: { $0["type"] as? String == "tool_result" }) else { return nil }
+
+        for block in blocks where block["type"] as? String == "text" {
+            guard let text = block["text"] as? String,
+                  !text.hasPrefix("<command-name>"),
+                  !text.hasPrefix("<local-command"),
+                  !text.hasPrefix("Caveat:") else { continue }
+            return text
+        }
+        return nil
+    }
+
     private static func truncateMessage(_ message: String?, maxLength: Int = 80) -> String? {
         guard let msg = message else { return nil }
         let cleaned = msg.trimmingCharacters(in: .whitespacesAndNewlines)

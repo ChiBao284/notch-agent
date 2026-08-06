@@ -6,5 +6,8 @@
     <false/>
     <key>com.apple.security.files.user-selected.read-only</key>
     <true/>
+    <!-- Send Apple Events to Terminal/iTerm2 so notch messages reach the session -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
 </dict>
 </plist>

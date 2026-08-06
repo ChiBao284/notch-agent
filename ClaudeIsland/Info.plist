@@ -17,6 +17,10 @@
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2025. All rights reserved.</string>
 
+    <!-- Needed to deliver messages typed in the notch into a Terminal/iTerm2 tab -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Vibe Notch needs to control your terminal so messages you type in the notch reach the Claude Code session running there.</string>
+
     <!-- Sparkle Update Configuration -->
     <key>SUFeedURL</key>
     <string>https://vibenotch.app/appcast.xml</string>

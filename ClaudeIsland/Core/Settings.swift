@@ -39,6 +39,23 @@ enum AppSettings {
     private enum Keys {
         static let notificationSound = "notificationSound"
         static let claudeDirectoryName = "claudeDirectoryName"
+        static let themeMode = "themeMode"
+    }
+
+    // MARK: - Theme
+
+    /// Appearance for the notch UI. Defaults to following the system.
+    static var themeMode: AppThemeMode {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.themeMode),
+                  let mode = AppThemeMode(rawValue: rawValue) else {
+                return .system
+            }
+            return mode
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Keys.themeMode)
+        }
     }
 
     // MARK: - Notification Sound

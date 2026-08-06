@@ -20,6 +20,7 @@ struct NotchView: View {
     @StateObject private var sessionMonitor = ClaudeSessionMonitor()
     @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
     @ObservedObject private var updateManager = UpdateManager.shared
+    @ObservedObject private var themeManager = ThemeManager.shared
     @State private var previousPendingIds: Set<String> = []
     @State private var previousWaitingForInputIds: Set<String> = []
     @State private var waitingForInputTimestamps: [String: Date] = [:]  // sessionId -> when it entered waitingForInput
@@ -127,6 +128,33 @@ struct NotchView: View {
         )
     }
 
+    // MARK: - Theme
+
+    /// Whether the collapsed pill is pinned black.
+    ///
+    /// It overlays the hardware notch, so a light pill would read as a smudge
+    /// hugging the physical cutout. Only the expanded panel takes the theme
+    /// colour — and on notchless displays there is nothing to blend with, so
+    /// the pill follows the theme there too.
+    private var pillIsBlack: Bool {
+        viewModel.status != .opened && viewModel.hasPhysicalNotch
+    }
+
+    /// Body fill for the island.
+    private var panelFill: Color {
+        pillIsBlack ? .black : .notchPanel
+    }
+
+    /// Accents inside the collapsed pill need the bright variants while the
+    /// pill is pinned black, even in light mode.
+    private var pillGreen: Color {
+        pillIsBlack ? PillColors.green : TerminalColors.green
+    }
+
+    private var pillOrange: Color {
+        pillIsBlack ? PillColors.orange : TerminalColors.claudeOrange
+    }
+
     // Animation springs
     private let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
     private let closeAnimation = Animation.spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
@@ -149,16 +177,16 @@ struct NotchView: View {
                             : cornerRadiusInsets.closed.bottom
                     )
                     .padding([.horizontal, .bottom], viewModel.status == .opened ? 12 : 0)
-                    .background(.black)
+                    .background(panelFill)
                     .clipShape(currentNotchShape)
                     .overlay(alignment: .top) {
                         Rectangle()
-                            .fill(.black)
+                            .fill(panelFill)
                             .frame(height: 1)
                             .padding(.horizontal, topCornerRadius)
                     }
                     .shadow(
-                        color: (viewModel.status == .opened || isHovering) ? .black.opacity(0.7) : .clear,
+                        color: (viewModel.status == .opened || isHovering) ? .notchShadow : .clear,
                         radius: 6
                     )
                     .frame(
@@ -187,7 +215,8 @@ struct NotchView: View {
         }
         .opacity(isVisible ? 1 : 0)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(themeManager.colorScheme)
+        .animation(.easeInOut(duration: 0.2), value: themeManager.isDark)
         .onAppear {
             sessionMonitor.startMonitoring()
             // On non-notched devices, keep visible so users have a target to interact with
@@ -251,10 +280,11 @@ struct NotchView: View {
                 HStack(spacing: 4) {
                     ClaudeCrabIcon(size: 14, animateLegs: isProcessing)
                         .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
+                        .modifier(OpenClaudeAction(isEnabled: viewModel.status == .opened, session: focusTargetSession))
 
                     // Permission indicator only (amber) - waiting for input shows checkmark on right
                     if hasPendingPermission {
-                        PermissionIndicatorIcon(size: 14, color: Color(red: 0.85, green: 0.47, blue: 0.34))
+                        PermissionIndicatorIcon(size: 14, color: pillOrange)
                             .matchedGeometryEffect(id: "status-indicator", in: activityNamespace, isSource: showClosedActivity)
                     }
                 }
@@ -272,9 +302,9 @@ struct NotchView: View {
                     .fill(.clear)
                     .frame(width: closedNotchSize.width - 20)
             } else {
-                // Closed with activity: black spacer (with optional bounce)
+                // Closed with activity: spacer matching the body (with optional bounce)
                 Rectangle()
-                    .fill(.black)
+                    .fill(panelFill)
                     .frame(width: closedNotchSize.width - cornerRadiusInsets.closed.top + (isBouncing ? 16 : 0))
             }
 
@@ -287,7 +317,7 @@ struct NotchView: View {
                         .padding(.trailing, viewModel.status == .opened ? 0 : 4)
                 } else if hasWaitingForInput {
                     // Checkmark for waiting-for-input on the right side
-                    ReadyForInputIndicatorIcon(size: 14, color: TerminalColors.green)
+                    ReadyForInputIndicatorIcon(size: 14, color: pillGreen)
                         .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
                         .frame(width: viewModel.status == .opened ? 20 : sideWidth)
                         .padding(.trailing, viewModel.status == .opened ? 0 : 4)
@@ -301,6 +331,20 @@ struct NotchView: View {
         max(0, closedNotchSize.height - 12) + 10
     }
 
+    // MARK: - Claude Icon Target
+
+    /// Session whose terminal the Claude icon falls back to when Claude Desktop
+    /// isn't installed: the chat being viewed, then anything asking for
+    /// attention, then the most recently active session.
+    private var focusTargetSession: SessionState? {
+        if case .chat(let session) = viewModel.contentType {
+            return session
+        }
+        return sessionMonitor.instances.first { $0.phase.isWaitingForApproval }
+            ?? sessionMonitor.instances.first { $0.phase == .processing }
+            ?? sessionMonitor.instances.max { $0.lastActivity < $1.lastActivity }
+    }
+
     // MARK: - Opened Header Content
 
     @ViewBuilder
@@ -311,6 +355,7 @@ struct NotchView: View {
             if !showClosedActivity {
                 ClaudeCrabIcon(size: 14)
                     .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: !showClosedActivity)
+                    .modifier(OpenClaudeAction(isEnabled: true, session: focusTargetSession))
                     .padding(.leading, 8)
             }
 
@@ -328,7 +373,7 @@ struct NotchView: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: viewModel.contentType == .menu ? "xmark" : "line.3.horizontal")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.4))
+                        .foregroundColor(.notchFG.opacity(0.4))
                         .frame(width: 22, height: 22)
                         .contentShape(Rectangle())
 
@@ -506,5 +551,45 @@ struct NotchView: View {
         }
 
         return false
+    }
+}
+
+// MARK: - Open Claude Action
+
+/// Turns the Claude icon into a button that brings Claude back to the front:
+/// Claude Desktop when it's installed, otherwise the terminal running Claude Code.
+///
+/// Only active while the notch is open — a click on the collapsed pill has to
+/// keep expanding the island, which is its primary affordance.
+private struct OpenClaudeAction: ViewModifier {
+    let isEnabled: Bool
+    let session: SessionState?
+
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content
+                .scaleEffect(isHovering ? 1.15 : 1.0)
+                .frame(width: 26, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isHovering ? Color.notchFG.opacity(0.1) : Color.clear)
+                )
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                        isHovering = hovering
+                    }
+                }
+                .onTapGesture {
+                    Task {
+                        await ClaudeAppLauncher.shared.openClaude(fallbackSession: session)
+                    }
+                }
+                .help(ClaudeAppLauncher.shared.actionHint)
+        } else {
+            content
+        }
     }
 }

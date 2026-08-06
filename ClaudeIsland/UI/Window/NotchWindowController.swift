@@ -83,6 +83,21 @@ class NotchWindowController: NSWindowController {
             }
             .store(in: &cancellables)
 
+        // Pin the panel's appearance to the chosen theme. The adaptive colours in
+        // Theme.swift resolve against the window's NSAppearance, so this is what
+        // makes light mode actually take effect (nil = follow the system).
+        notchWindow.appearance = ThemeManager.shared.panelAppearance
+        ThemeManager.shared.$mode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak notchWindow] mode in
+                switch mode {
+                case .system: notchWindow?.appearance = nil
+                case .dark: notchWindow?.appearance = NSAppearance(named: .darkAqua)
+                case .light: notchWindow?.appearance = NSAppearance(named: .aqua)
+                }
+            }
+            .store(in: &cancellables)
+
         // Start with ignoring mouse events (closed state)
         notchWindow.ignoresMouseEvents = true
 
