@@ -64,6 +64,9 @@ actor ConversationParser {
 
     private struct CachedInfo {
         let modificationDate: Date
+        /// Byte offset just past the last newline we have folded in. A trailing
+        /// partial line is deliberately left unconsumed and re-read next time.
+        let parsedBytes: UInt64
         let info: ConversationInfo
     }
 
@@ -119,21 +122,100 @@ actor ConversationParser {
             return cached.info
         }
 
+        let fileSize = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+
+        // Fast path: the log only ever gets appended to during a session, so fold
+        // in the new bytes instead of re-reading the whole file. That file reaches
+        // tens of MB over a long session and this runs on every hook-driven sync,
+        // so a full re-parse made cost grow with conversation length.
+        if let cached = cache[sessionFile],
+           cached.parsedBytes > 0,
+           fileSize > cached.parsedBytes,
+           let (appended, consumedTo) = readAppended(path: sessionFile, from: cached.parsedBytes) {
+            let delta = scan(lines: appended)
+            let merged = merge(cached.info, with: delta)
+            cache[sessionFile] = CachedInfo(modificationDate: modDate, parsedBytes: consumedTo, info: merged)
+            return merged
+        }
+
+        // Slow path: first sight of the file, or it was rewritten/truncated
+        // (a /clear does that), so nothing cached can be trusted.
         guard let data = fileManager.contents(atPath: sessionFile),
               let content = String(data: data, encoding: .utf8) else {
             return ConversationInfo(summary: nil, lastMessage: nil, lastMessageRole: nil, lastToolName: nil, firstUserMessage: nil, lastUserMessage: nil, lastAssistantMessage: nil, lastUserMessageDate: nil)
         }
 
         let info = parseContent(content)
-        cache[sessionFile] = CachedInfo(modificationDate: modDate, info: info)
+        cache[sessionFile] = CachedInfo(
+            modificationDate: modDate,
+            parsedBytes: Self.completeLineBoundary(of: data),
+            info: info
+        )
 
         return info
     }
 
-    /// Parse JSONL content
-    private func parseContent(_ content: String) -> ConversationInfo {
-        let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
+    // MARK: - Incremental Folding
 
+    /// Read the bytes appended since `offset`, returning whole lines only plus
+    /// the offset just past the last newline consumed.
+    private func readAppended(path: String, from offset: UInt64) -> ([String], UInt64)? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+
+        do {
+            try handle.seek(toOffset: offset)
+        } catch {
+            return nil
+        }
+
+        guard let data = try? handle.readToEnd(), !data.isEmpty else { return nil }
+
+        // Ignore a trailing partial line; it will be complete on the next pass.
+        let boundary = Self.completeLineBoundary(of: data)
+        guard boundary > 0 else { return nil }
+
+        let whole = data.prefix(Int(boundary))
+        guard let text = String(data: whole, encoding: .utf8) else { return nil }
+
+        let lines = text.components(separatedBy: "\n").filter { !$0.isEmpty }
+        return (lines, offset + boundary)
+    }
+
+    /// Byte count of `data` up to and including its final newline.
+    private nonisolated static func completeLineBoundary(of data: Data) -> UInt64 {
+        guard let index = data.lastIndex(of: 0x0A) else { return 0 }
+        return UInt64(data.distance(from: data.startIndex, to: index) + 1)
+    }
+
+    /// Fold a freshly scanned slice into the running result.
+    ///
+    /// Every field's semantics survive this: the "last X" fields take the newest
+    /// occurrence, so a hit in the new slice wins and a miss keeps the old value;
+    /// `firstUserMessage` is the oldest occurrence so the cached one always wins;
+    /// usage is a running total so the slice's tokens are added.
+    private func merge(_ base: ConversationInfo, with delta: ContentDelta) -> ConversationInfo {
+        var usage = base.usage
+        usage.inputTokens += delta.usage.inputTokens
+        usage.outputTokens += delta.usage.outputTokens
+        usage.cacheReadTokens += delta.usage.cacheReadTokens
+        usage.cacheCreationTokens += delta.usage.cacheCreationTokens
+
+        return ConversationInfo(
+            summary: delta.summary ?? base.summary,
+            lastMessage: delta.lastMessage.map { Self.truncateMessage($0, maxLength: 80) ?? $0 } ?? base.lastMessage,
+            lastMessageRole: delta.lastMessage != nil ? delta.lastMessageRole : base.lastMessageRole,
+            lastToolName: delta.lastMessage != nil ? delta.lastToolName : base.lastToolName,
+            firstUserMessage: base.firstUserMessage ?? delta.firstUserMessage.map { Self.truncateMessage($0, maxLength: 50) ?? $0 },
+            lastUserMessage: delta.lastUserMessage.map { Self.truncateMessage($0, maxLength: 80) ?? $0 } ?? base.lastUserMessage,
+            lastAssistantMessage: delta.lastAssistantMessage.map { Self.truncateMessage($0, maxLength: 90) ?? $0 } ?? base.lastAssistantMessage,
+            lastUserMessageDate: delta.lastUserMessageDate ?? base.lastUserMessageDate,
+            usage: usage
+        )
+    }
+
+    /// Fields harvested from one slice of the log, before truncation.
+    private struct ContentDelta {
         var summary: String?
         var lastMessage: String?
         var lastMessageRole: String?
@@ -143,81 +225,98 @@ actor ConversationParser {
         var lastAssistantMessage: String?
         var lastUserMessageDate: Date?
         var usage = UsageInfo()
+    }
 
+    /// Parse JSONL content
+    private func parseContent(_ content: String) -> ConversationInfo {
+        let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
+        let delta = scan(lines: lines)
+
+        return ConversationInfo(
+            summary: delta.summary,
+            lastMessage: Self.truncateMessage(delta.lastMessage, maxLength: 80),
+            lastMessageRole: delta.lastMessageRole,
+            lastToolName: delta.lastToolName,
+            firstUserMessage: Self.truncateMessage(delta.firstUserMessage, maxLength: 50),
+            lastUserMessage: Self.truncateMessage(delta.lastUserMessage, maxLength: 80),
+            lastAssistantMessage: Self.truncateMessage(delta.lastAssistantMessage, maxLength: 90),
+            lastUserMessageDate: delta.lastUserMessageDate,
+            usage: delta.usage
+        )
+    }
+
+    /// Harvest every field of interest from a slice of log lines.
+    ///
+    /// Decodes each line exactly once. The previous version ran three separate
+    /// loops that each re-ran `JSONSerialization` over the same lines, so a file
+    /// of N lines cost up to 2N decodes.
+    private func scan(lines: [String]) -> ContentDelta {
+        var delta = ContentDelta()
         let formatter = Self.isoFormatter
 
-        // First pass: collect usage from all assistant messages
+        // Decode once, keeping only what later passes need.
+        var decoded: [[String: Any]] = []
+        decoded.reserveCapacity(lines.count)
+
         for line in lines {
             guard let lineData = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
                 continue
             }
+            decoded.append(json)
 
+            // Usage is a running total over every assistant turn.
             if json["type"] as? String == "assistant",
                let message = json["message"] as? [String: Any],
                let usageDict = message["usage"] as? [String: Any] {
-                usage.inputTokens += usageDict["input_tokens"] as? Int ?? 0
-                usage.outputTokens += usageDict["output_tokens"] as? Int ?? 0
-                usage.cacheReadTokens += usageDict["cache_read_input_tokens"] as? Int ?? 0
-                usage.cacheCreationTokens += usageDict["cache_creation_input_tokens"] as? Int ?? 0
+                delta.usage.inputTokens += usageDict["input_tokens"] as? Int ?? 0
+                delta.usage.outputTokens += usageDict["output_tokens"] as? Int ?? 0
+                delta.usage.cacheReadTokens += usageDict["cache_read_input_tokens"] as? Int ?? 0
+                delta.usage.cacheCreationTokens += usageDict["cache_creation_input_tokens"] as? Int ?? 0
             }
         }
 
-        for line in lines {
-            guard let lineData = line.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
-                continue
-            }
-
-            let type = json["type"] as? String
-            let isMeta = json["isMeta"] as? Bool ?? false
-
-            if type == "user" && !isMeta {
-                if let message = json["message"] as? [String: Any],
-                   let msgContent = message["content"] as? String {
-                    if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
-                        firstUserMessage = Self.truncateMessage(msgContent, maxLength: 50)
-                        break
-                    }
-                }
-            }
+        // Oldest real user prompt, for the fallback title.
+        for json in decoded {
+            guard json["type"] as? String == "user", !(json["isMeta"] as? Bool ?? false) else { continue }
+            guard let message = json["message"] as? [String: Any],
+                  let msgContent = message["content"] as? String,
+                  !msgContent.hasPrefix("<command-name>"),
+                  !msgContent.hasPrefix("<local-command"),
+                  !msgContent.hasPrefix("Caveat:") else { continue }
+            delta.firstUserMessage = msgContent
+            break
         }
 
+        // Newest of everything else.
         var foundLastUserMessage = false
         var foundLastAssistantMessage = false
-        for line in lines.reversed() {
-            guard let lineData = line.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
-                continue
-            }
 
+        for json in decoded.reversed() {
             let type = json["type"] as? String
 
-            if lastMessage == nil {
-                if type == "user" || type == "assistant" {
-                    let isMeta = json["isMeta"] as? Bool ?? false
-                    if !isMeta, let message = json["message"] as? [String: Any] {
-                        if let msgContent = message["content"] as? String {
-                            if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
-                                lastMessage = msgContent
-                                lastMessageRole = type
-                            }
-                        } else if let contentArray = message["content"] as? [[String: Any]] {
-                            for block in contentArray.reversed() {
-                                let blockType = block["type"] as? String
-                                if blockType == "tool_use" {
-                                    let toolName = block["name"] as? String ?? "Tool"
-                                    let toolInput = Self.formatToolInput(block["input"] as? [String: Any], toolName: toolName)
-                                    lastMessage = toolInput
-                                    lastMessageRole = "tool"
-                                    lastToolName = toolName
+            if delta.lastMessage == nil, type == "user" || type == "assistant" {
+                let isMeta = json["isMeta"] as? Bool ?? false
+                if !isMeta, let message = json["message"] as? [String: Any] {
+                    if let msgContent = message["content"] as? String {
+                        if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
+                            delta.lastMessage = msgContent
+                            delta.lastMessageRole = type
+                        }
+                    } else if let contentArray = message["content"] as? [[String: Any]] {
+                        for block in contentArray.reversed() {
+                            let blockType = block["type"] as? String
+                            if blockType == "tool_use" {
+                                let toolName = block["name"] as? String ?? "Tool"
+                                delta.lastMessage = Self.formatToolInput(block["input"] as? [String: Any], toolName: toolName)
+                                delta.lastMessageRole = "tool"
+                                delta.lastToolName = toolName
+                                break
+                            } else if blockType == "text", let text = block["text"] as? String {
+                                if !text.hasPrefix("[Request interrupted by user") {
+                                    delta.lastMessage = text
+                                    delta.lastMessageRole = type
                                     break
-                                } else if blockType == "text", let text = block["text"] as? String {
-                                    if !text.hasPrefix("[Request interrupted by user") {
-                                        lastMessage = text
-                                        lastMessageRole = type
-                                        break
-                                    }
                                 }
                             }
                         }
@@ -225,45 +324,33 @@ actor ConversationParser {
                 }
             }
 
-            if !foundLastUserMessage && type == "user" {
-                let isMeta = json["isMeta"] as? Bool ?? false
-                if !isMeta, let message = json["message"] as? [String: Any],
-                   let text = Self.userTypedText(from: message["content"]) {
-                    lastUserMessage = text
-                    if let timestampStr = json["timestamp"] as? String {
-                        lastUserMessageDate = formatter.date(from: timestampStr)
-                    }
-                    foundLastUserMessage = true
+            if !foundLastUserMessage, type == "user", !(json["isMeta"] as? Bool ?? false),
+               let message = json["message"] as? [String: Any],
+               let text = Self.userTypedText(from: message["content"]) {
+                delta.lastUserMessage = text
+                if let timestampStr = json["timestamp"] as? String {
+                    delta.lastUserMessageDate = formatter.date(from: timestampStr)
                 }
+                foundLastUserMessage = true
             }
 
-            if !foundLastAssistantMessage && type == "assistant",
+            if !foundLastAssistantMessage, type == "assistant",
                let message = json["message"] as? [String: Any],
                let text = Self.assistantText(from: message["content"]) {
-                lastAssistantMessage = text
+                delta.lastAssistantMessage = text
                 foundLastAssistantMessage = true
             }
 
-            if summary == nil, type == "summary", let summaryText = json["summary"] as? String {
-                summary = summaryText
+            if delta.summary == nil, type == "summary", let summaryText = json["summary"] as? String {
+                delta.summary = summaryText
             }
 
-            if summary != nil && lastMessage != nil && foundLastUserMessage && foundLastAssistantMessage {
+            if delta.summary != nil && delta.lastMessage != nil && foundLastUserMessage && foundLastAssistantMessage {
                 break
             }
         }
 
-        return ConversationInfo(
-            summary: summary,
-            lastMessage: Self.truncateMessage(lastMessage, maxLength: 80),
-            lastMessageRole: lastMessageRole,
-            lastToolName: lastToolName,
-            firstUserMessage: firstUserMessage,
-            lastUserMessage: Self.truncateMessage(lastUserMessage, maxLength: 80),
-            lastAssistantMessage: Self.truncateMessage(lastAssistantMessage, maxLength: 90),
-            lastUserMessageDate: lastUserMessageDate,
-            usage: usage
-        )
+        return delta
     }
 
     /// Format tool input for display in instance list

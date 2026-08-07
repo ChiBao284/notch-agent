@@ -205,7 +205,6 @@ struct InstanceRow: View {
 
     private let claudeOrange = TerminalColors.claudeOrange
     private let spinnerSymbols = ["·", "✢", "✳", "∗", "✻", "✽"]
-    private let spinnerTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
 
     /// Whether we're showing the approval UI
     private var isWaitingForApproval: Bool {
@@ -393,6 +392,18 @@ struct InstanceRow: View {
         .onHover { isHovered = $0 }
     }
 
+    /// Advance the spinner while this row is busy.
+    ///
+    /// Previously a per-row 0.15s timer that fired for every row in the list,
+    /// idle ones included; now it only runs inside the busy branches below.
+    private func runSpinner() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { break }
+            spinnerPhase = (spinnerPhase + 1) % spinnerSymbols.count
+        }
+    }
+
     @ViewBuilder
     private var stateIndicator: some View {
         switch session.phase {
@@ -400,16 +411,12 @@ struct InstanceRow: View {
             Text(spinnerSymbols[spinnerPhase % spinnerSymbols.count])
                 .font(.system(size: 12, weight: .bold))
                 .foregroundColor(claudeOrange)
-                .onReceive(spinnerTimer) { _ in
-                    spinnerPhase = (spinnerPhase + 1) % spinnerSymbols.count
-                }
+                .task { await runSpinner() }
         case .waitingForApproval:
             Text(spinnerSymbols[spinnerPhase % spinnerSymbols.count])
                 .font(.system(size: 12, weight: .bold))
                 .foregroundColor(TerminalColors.amber)
-                .onReceive(spinnerTimer) { _ in
-                    spinnerPhase = (spinnerPhase + 1) % spinnerSymbols.count
-                }
+                .task { await runSpinner() }
         case .waitingForInput:
             Circle()
                 .fill(TerminalColors.green)

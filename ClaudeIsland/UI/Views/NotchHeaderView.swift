@@ -15,8 +15,6 @@ struct ClaudeCrabIcon: View {
 
     @State private var legPhase: Int = 0
 
-    // Timer for leg animation
-    private let legTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
 
     init(size: CGFloat = 16, color: Color = Color(red: 0.85, green: 0.47, blue: 0.34), animateLegs: Bool = false) {
         self.size = size
@@ -84,8 +82,13 @@ struct ClaudeCrabIcon: View {
             context.fill(rightEye, with: .color(.black))
         }
         .frame(width: size * (66.0 / 52.0), height: size)
-        .onReceive(legTimer) { _ in
-            if animateLegs {
+        // Driven only while the legs are actually moving. This used to be an
+        // always-on 0.15s timer that woke the app even with nothing animating.
+        .task(id: animateLegs) {
+            guard animateLegs else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled else { break }
                 legPhase = (legPhase + 1) % 4
             }
         }

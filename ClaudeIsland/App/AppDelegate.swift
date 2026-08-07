@@ -56,7 +56,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             "macos_version": osVersion
         ])
 
-        fetchAndRegisterClaudeVersion()
+        // Walks every project directory and stats every .jsonl, so it must not
+        // sit on the launch path ahead of the first paint.
+        Task.detached(priority: .utility) { [weak self] in
+            self?.fetchAndRegisterClaudeVersion()
+        }
 
         Analytics.setPeopleProperties([
             "app_version": version,

@@ -35,6 +35,14 @@ actor SessionStore {
     /// Status check interval (3 seconds)
     private let statusCheckIntervalSeconds: UInt64 = 3
 
+    /// PID whose tmux membership has already been resolved, per session.
+    ///
+    /// Resolving it means a full `ps` sweep of every process on the machine
+    /// (~563 of them) just to walk one parent chain. A live process cannot move
+    /// into or out of tmux, so the answer only changes when the PID does —
+    /// previously this ran on every single hook event.
+    private var resolvedTmuxPids: [String: Int] = [:]
+
     // MARK: - Published State (for UI)
 
     /// Publisher for session state changes (nonisolated for Combine subscription from any context)
@@ -131,9 +139,10 @@ actor SessionStore {
         }
 
         session.pid = event.pid
-        if let pid = event.pid {
+        if let pid = event.pid, resolvedTmuxPids[sessionId] != pid {
             let tree = ProcessTreeBuilder.shared.buildTree()
             session.isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
+            resolvedTmuxPids[sessionId] = pid
         }
         if let tty = event.tty {
             session.tty = tty.replacingOccurrences(of: "/dev/", with: "")
@@ -143,6 +152,7 @@ actor SessionStore {
         if event.status == "ended" {
             sessions.removeValue(forKey: sessionId)
             cancelPendingSync(sessionId: sessionId)
+            resolvedTmuxPids.removeValue(forKey: sessionId)
             return
         }
 
@@ -189,8 +199,9 @@ actor SessionStore {
         }
 
         sessions[sessionId] = session
-        publishState()
 
+        // No publish here — process(_:) publishes once on the way out, and
+        // publishing twice per event doubled the downstream SwiftUI invalidation.
         if event.shouldSyncFile {
             scheduleFileSync(sessionId: sessionId, cwd: event.cwd)
         }
@@ -1098,6 +1109,7 @@ actor SessionStore {
             if session.phase == .ended {
                 sessions.removeValue(forKey: sessionId)
                 cancelPendingSync(sessionId: sessionId)
+                resolvedTmuxPids.removeValue(forKey: sessionId)
                 needsPublish = true
                 continue
             }
@@ -1108,6 +1120,7 @@ actor SessionStore {
                     Self.logger.info("Process \(pid) no longer running, ending session \(sessionId.prefix(8))")
                     sessions.removeValue(forKey: sessionId)
                     cancelPendingSync(sessionId: sessionId)
+                    resolvedTmuxPids.removeValue(forKey: sessionId)
                     needsPublish = true
                     continue
                 }
