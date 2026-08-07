@@ -7,7 +7,6 @@ import SwiftUI
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowManager: WindowManager?
     private var screenObserver: ScreenObserver?
-    private var updateCheckTimer: Timer?
 
     static var shared: AppDelegate?
     let updater: SPUUpdater
@@ -81,14 +80,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handleScreenChange()
         }
 
-        if updater.canCheckForUpdates {
-            updater.checkForUpdates()
-        }
-
-        updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            guard let updater = self?.updater, updater.canCheckForUpdates else { return }
-            updater.checkForUpdates()
-        }
+        // Automatic update checks (on launch and hourly) are disabled — the
+        // "Check for Updates" row in the menu still checks on demand via
+        // updater.checkForUpdates(), this just stops the app from doing it
+        // unprompted.
     }
 
     private func handleScreenChange() {
@@ -99,7 +94,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Reached even when the single-instance guard terminated us before
         // analytics started — Analytics no-ops in that case.
         Analytics.flush()
-        updateCheckTimer?.invalidate()
         screenObserver = nil
     }
 
