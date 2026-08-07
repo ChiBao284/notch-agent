@@ -1,16 +1,8 @@
 <div align="center">
-  <img src="ClaudeIsland/Assets.xcassets/AppIcon.appiconset/icon_128x128.png" alt="Logo" width="100" height="100">
+  <img src="ClaudeIsland/Assets.xcassets/AppIcon.appiconset/256.png" alt="Logo" width="100" height="100">
   <h3 align="center">NotchAgent</h3>
   <p align="center">
     A macOS menu bar app that brings Dynamic Island-style notifications to Claude Code CLI sessions.
-    <br />
-    <br />
-    <a href="https://github.com/farouqaldori/vibe-notch/releases/latest" target="_blank" rel="noopener noreferrer">
-      <img src="https://img.shields.io/github/v/release/farouqaldori/vibe-notch?style=rounded&color=white&labelColor=000000&label=release" alt="Release Version" />
-    </a>
-    <a href="#" target="_blank" rel="noopener noreferrer">
-      <img alt="GitHub Downloads" src="https://img.shields.io/github/downloads/farouqaldori/vibe-notch/total?style=rounded&color=white&labelColor=000000">
-    </a>
   </p>
 </div>
 
@@ -38,6 +30,32 @@ Download the latest release or build from source:
 ```bash
 xcodebuild -scheme ClaudeIsland -configuration Release build
 ```
+
+## Usage
+
+**The pill.** NotchAgent lives as a small pill overlaid on your MacBook's notch (or floating near the menu bar on notchless Macs). It stays hidden until a Claude Code session needs your attention:
+
+- **Spinner + elapsed time** — a session is actively working
+- **Orange dot** — a session is waiting on a tool permission
+- **Green checkmark** — a session finished and is waiting for your next message
+
+Click or hover the pill to expand it.
+
+**Sessions & chat.** Expanded, the notch lists every running Claude Code session. Click one to open its chat — full conversation history with markdown rendering, live tool-call status, and a composer to type a message directly from the notch. Messages are delivered straight to the session's terminal (via tmux, terminal scripting, or synthetic keystrokes as a last resort), so you don't have to switch windows to keep a conversation going.
+
+**Approvals.** When Claude asks to run a tool, the notch expands with Approve/Deny buttons right there — no alt-tabbing to the terminal.
+
+**The crab icon.** Click it to bring the relevant terminal (or Claude Desktop, if installed) to the front — useful when you want to look at the full session outside the notch.
+
+**Settings.** Open the menu (☰ in the top-right of the expanded notch) for:
+
+- **Theme** — light, dark, or match system
+- **Screen** — which display shows the notch on multi-monitor setups
+- **Sound** — the notification sound played when a session finishes
+- **Claude Directory** — which `~/.claude` projects directory to watch
+- **Launch at Login**
+- **Hooks** — install/uninstall the Claude Code hooks NotchAgent relies on
+- **Accessibility** — required so NotchAgent can type messages into a terminal or Claude Desktop on your behalf
 
 ## How It Works
 

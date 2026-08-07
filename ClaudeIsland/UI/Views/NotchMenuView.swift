@@ -15,7 +15,6 @@ import Sparkle
 
 struct NotchMenuView: View {
     @ObservedObject var viewModel: NotchViewModel
-    @ObservedObject private var updateManager = UpdateManager.shared
     @ObservedObject private var screenSelector = ScreenSelector.shared
     @ObservedObject private var soundSelector = SoundSelector.shared
     @ObservedObject private var themeManager = ThemeManager.shared
@@ -87,9 +86,6 @@ struct NotchMenuView: View {
                 Divider()
                     .background(Color.notchFG.opacity(0.08))
                     .padding(.vertical, 4)
-
-                // About
-                UpdateRow(updateManager: updateManager)
 
                 MenuRow(
                     icon: "star",
@@ -439,6 +435,14 @@ struct AccessibilityRow: View {
     }
 
     private func openAccessibilitySettings() {
+        // Plain AXIsProcessTrusted() never registers the app with TCC — only
+        // the *WithOptions variant does, keyed to this exact running binary.
+        // Without this, a stale entry from before a rename (or a checkbox
+        // pointing at the wrong build) can never be fixed by opening Settings
+        // alone, because the running process was never listed under it.
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
+
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }

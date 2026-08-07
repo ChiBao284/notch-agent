@@ -70,7 +70,20 @@ enum KeystrokeTyper {
     // MARK: - Focus Check
 
     /// Whether the system-wide focused element would accept typed text.
+    ///
+    /// Retries briefly: a Chromium/Electron host (e.g. Claude Desktop) only
+    /// finishes wiring up its accessibility tree after the first AX query
+    /// against it, so a check made right after activating the app can come
+    /// back empty even though the composer genuinely has focus.
     private static func focusedElementAcceptsText() -> Bool {
+        for attempt in 0..<3 {
+            if focusedElementAcceptsTextOnce() { return true }
+            if attempt < 2 { usleep(150_000) }
+        }
+        return false
+    }
+
+    private static func focusedElementAcceptsTextOnce() -> Bool {
         let systemWide = AXUIElementCreateSystemWide()
 
         var focusedValue: CFTypeRef?
