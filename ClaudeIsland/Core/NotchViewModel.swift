@@ -123,10 +123,11 @@ class NotchViewModel: ObservableObject {
     /// The list's own `.padding(.vertical, 4)`.
     private static let instanceListPadding: CGFloat = 8
 
-    /// `PlanUsagePanel` at its full layout: title row, dials with their reset
-    /// lines, and the open-Claude button. Reserved even when usage hasn't
-    /// arrived yet — the readout fetches on open, so it is about to appear.
-    private static let usageReadoutHeight: CGFloat = 124
+    /// `UsageReadoutPager` at its full layout: the taller of its two pages plus
+    /// the tab bar under them, measured at 145pt with a little slack. Reserved
+    /// even when usage hasn't arrived yet — the readout fetches on open, so it
+    /// is about to appear.
+    private static let usageReadoutHeight: CGFloat = 150
 
     /// `NotchView` caps the panel *after* padding its body, so this height has
     /// to cover that padding too — leave it out and the content is squeezed by

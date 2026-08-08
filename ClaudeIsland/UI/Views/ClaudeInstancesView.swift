@@ -181,7 +181,7 @@ private struct OpenClaudeBackdrop<Content: View>: View {
             content()
 
             if hasUsage {
-                PlanUsagePanel(
+                UsageReadoutPager(
                     rateLimits: rateLimits,
                     isHovering: isHovering,
                     onOpenClaude: openClaude
