@@ -46,6 +46,10 @@ class NotchViewModel: ObservableObject {
     @Published var contentType: NotchContentType = .instances
     @Published var isHovering: Bool = false
 
+    /// How many rows the instances list will draw. Only the panel's height cares,
+    /// so this deliberately tracks the count rather than the sessions themselves.
+    @Published private(set) var sessionRowCount: Int = 0
+
     // MARK: - Dependencies
 
     private let screenSelector = ScreenSelector.shared
@@ -87,14 +91,49 @@ class NotchViewModel: ObservableObject {
                     + hoverSpeedSelector.expandedPickerHeight
             )
         case .instances:
-            // Rows carry three lines now (title, project/branch, last prompt),
-            // so give the list back the height that third line costs.
+            // Fit the content instead of reserving a fixed slab. At a fixed 360
+            // a single session left a band of dead space between its row and the
+            // usage readout, because the readout is bottom-aligned in whatever
+            // room the list doesn't use.
+            let rows = CGFloat(max(1, sessionRowCount))
+            let height = headerRowHeight
+                + Self.instanceListPadding
+                + rows * Self.instanceRowHeight
+                + Self.usageReadoutHeight
+                + Self.panelBottomPadding
+
             return CGSize(
                 width: min(screenRect.width * 0.4, 480),
-                height: 360
+                // Capped at what the panel used to be, so a long list scrolls
+                // exactly as it did before rather than growing past it.
+                height: min(height, Self.instancesMaxHeight)
             )
         }
     }
+
+    /// Header strip above the content — the same height `NotchView` gives it.
+    private var headerRowHeight: CGFloat {
+        max(24, deviceNotchRect.height)
+    }
+
+    /// One `InstanceRow`: three text lines (13/11/11pt) at 2pt spacing inside
+    /// 10pt vertical padding, plus the 2pt gap to the next row.
+    private static let instanceRowHeight: CGFloat = 66
+
+    /// The list's own `.padding(.vertical, 4)`.
+    private static let instanceListPadding: CGFloat = 8
+
+    /// `PlanUsagePanel` at its full layout: title row, dials with their reset
+    /// lines, and the open-Claude button. Reserved even when usage hasn't
+    /// arrived yet — the readout fetches on open, so it is about to appear.
+    private static let usageReadoutHeight: CGFloat = 124
+
+    /// `NotchView` caps the panel *after* padding its body, so this height has
+    /// to cover that padding too — leave it out and the content is squeezed by
+    /// 12pt, which is enough to collapse the usage readout to its one-line form.
+    private static let panelBottomPadding: CGFloat = 12
+
+    private static let instancesMaxHeight: CGFloat = 360
 
     // MARK: - Animation
 
@@ -119,6 +158,16 @@ class NotchViewModel: ObservableObject {
         self.hasPhysicalNotch = hasPhysicalNotch
         setupEventHandlers()
         observeSelectors()
+        observeSessionCount()
+    }
+
+    private func observeSessionCount() {
+        SessionStore.shared.sessionsPublisher
+            .map(\.count)
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] count in self?.sessionRowCount = count }
+            .store(in: &cancellables)
     }
 
     private func observeSelectors() {
