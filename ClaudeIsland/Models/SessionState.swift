@@ -38,6 +38,22 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// Current phase in the session lifecycle
     var phase: SessionPhase
 
+    /// Claude Code's current permission mode for this session, as last
+    /// reported by a hook event. Nil until the first event carries one.
+    var permissionMode: ClaudePermissionMode?
+
+    /// This session's context window usage, as last reported by Claude
+    /// Code's statusLine integration. Nil until the first tick arrives.
+    var contextWindow: ContextWindowInfo?
+
+    /// Display name of the model in use (e.g. "Opus"), its raw id (e.g.
+    /// "claude-opus-5"), and the current reasoning effort level (e.g.
+    /// "high") — all from the same statusLine tick as `contextWindow`.
+    /// Effort is nil when the model doesn't support it.
+    var modelDisplayName: String?
+    var modelId: String?
+    var effortLevel: String?
+
     // MARK: - Chat History
 
     /// All chat items for this session (replaces ChatHistoryManager.histories)
@@ -85,6 +101,11 @@ struct SessionState: Equatable, Identifiable, Sendable {
         turnStartedAt: Date? = nil,
         turnEndedAt: Date? = nil,
         phase: SessionPhase = .idle,
+        permissionMode: ClaudePermissionMode? = nil,
+        contextWindow: ContextWindowInfo? = nil,
+        modelDisplayName: String? = nil,
+        modelId: String? = nil,
+        effortLevel: String? = nil,
         chatItems: [ChatHistoryItem] = [],
         toolTracker: ToolTracker = ToolTracker(),
         subagentState: SubagentState = SubagentState(),
@@ -107,6 +128,11 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.turnStartedAt = turnStartedAt
         self.turnEndedAt = turnEndedAt
         self.phase = phase
+        self.permissionMode = permissionMode
+        self.contextWindow = contextWindow
+        self.modelDisplayName = modelDisplayName
+        self.modelId = modelId
+        self.effortLevel = effortLevel
         self.chatItems = chatItems
         self.toolTracker = toolTracker
         self.subagentState = subagentState
@@ -149,6 +175,92 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// Best hint for matching window title
     var windowHint: String {
         conversationInfo.summary ?? projectName
+    }
+
+    /// "Opus 5", "Haiku 4.5" — the friendly model name with its version
+    /// suffix from the model id, since `modelDisplayName` alone doesn't
+    /// carry it (Claude Code reports "Opus" whether it's Opus 4 or 5).
+    var modelNameWithVersion: String? {
+        guard let modelDisplayName else { return modelId }
+        guard let modelId else { return modelDisplayName }
+
+        let tokens = modelId.split(separator: "-").map(String.init)
+        let versionTokens = tokens.drop(while: { $0.caseInsensitiveCompare(modelDisplayName) != .orderedSame })
+            .dropFirst()
+        guard !versionTokens.isEmpty else { return modelDisplayName }
+        return "\(modelDisplayName) \(versionTokens.joined(separator: "."))"
+    }
+
+    // MARK: - Session Setup Readout
+    //
+    // The statusLine hook is authoritative but only fires for Claude Code in a
+    // terminal — the desktop app has no status line to render, so it never runs
+    // that command. These fall back to the transcript, which records the same
+    // facts on every assistant turn, so the chat footer fills in either way.
+
+    /// "Opus 5" — the model in use, however we can find out.
+    var displayModelName: String? {
+        modelNameWithVersion ?? Self.friendlyModelName(conversationInfo.turnContext.modelId)
+    }
+
+    /// Reasoning effort ("max", "high"), or nil when the model has none.
+    var displayEffortLevel: String? {
+        effortLevel ?? conversationInfo.turnContext.effortLevel
+    }
+
+    /// Context window usage. A statusLine figure always wins: it is the only
+    /// source that *knows* the window size, which the transcript never records.
+    var displayContextWindow: ContextWindowInfo? {
+        if let contextWindow { return contextWindow }
+        guard let tokens = conversationInfo.turnContext.contextTokens else { return nil }
+
+        let size = inferredContextWindowSize(occupying: tokens)
+        return ContextWindowInfo(
+            usedPercentage: min(Double(tokens) / Double(size) * 100, 100),
+            contextWindowSize: size,
+            totalInputTokens: tokens,
+            totalOutputTokens: nil
+        )
+    }
+
+    /// Best guess at the window this session runs in, for the transcript-derived
+    /// readout only.
+    ///
+    /// Two signals, no third: usage past the standard size is *proof* of the
+    /// extended window, since Claude Code would have compacted long before
+    /// otherwise. Short of that, a session with no controlling terminal is
+    /// hosted by Claude Desktop, which runs extended — the same `tty == nil`
+    /// test `MessageSender` uses to spot a GUI host.
+    private func inferredContextWindowSize(occupying tokens: Int) -> Int {
+        if tokens > Self.standardContextWindowSize { return Self.extendedContextWindowSize }
+        return tty == nil ? Self.extendedContextWindowSize : Self.standardContextWindowSize
+    }
+
+    private static let standardContextWindowSize = 200_000
+    private static let extendedContextWindowSize = 1_000_000
+
+    /// "claude-opus-5" -> "Opus 5", "claude-haiku-4-5-20251001" -> "Haiku 4.5".
+    ///
+    /// Picks the family out by name rather than by position, because model ids
+    /// put the version on either side of it: "claude-opus-5" but also
+    /// "claude-3-5-sonnet-20241022".
+    private static func friendlyModelName(_ modelId: String?) -> String? {
+        guard let modelId, !modelId.isEmpty else { return nil }
+
+        var tokens = modelId.split(separator: "-").map(String.init)
+        if tokens.first?.caseInsensitiveCompare("claude") == .orderedSame {
+            tokens.removeFirst()
+        }
+
+        let isNumeric = { (token: String) in !token.isEmpty && token.allSatisfy(\.isNumber) }
+        guard let family = tokens.first(where: { !isNumeric($0) }) else { return modelId }
+
+        // Version parts are the numeric tokens; an 8-digit one is a release date
+        // rather than a version, and belongs in neither.
+        let versionTokens = tokens.filter { isNumeric($0) && $0.count < 8 }
+        let name = family.prefix(1).uppercased() + family.dropFirst()
+        guard !versionTokens.isEmpty else { return name }
+        return "\(name) \(versionTokens.joined(separator: "."))"
     }
 
     /// Pending tool name if waiting for approval

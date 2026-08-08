@@ -13,6 +13,7 @@ struct HookInstaller {
     static func installIfNeeded() {
         let hooksDir = ClaudePaths.hooksDir
         let pythonScript = hooksDir.appendingPathComponent("claude-island-state.py")
+        let statusLineScript = hooksDir.appendingPathComponent("claude-island-statusline.py")
 
         try? FileManager.default.createDirectory(
             at: hooksDir,
@@ -25,6 +26,15 @@ struct HookInstaller {
             try? FileManager.default.setAttributes(
                 [.posixPermissions: 0o755],
                 ofItemAtPath: pythonScript.path
+            )
+        }
+
+        if let bundled = Bundle.main.url(forResource: "claude-island-statusline", withExtension: "py") {
+            try? FileManager.default.removeItem(at: statusLineScript)
+            try? FileManager.default.copyItem(at: bundled, to: statusLineScript)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: statusLineScript.path
             )
         }
 
@@ -88,12 +98,31 @@ struct HookInstaller {
 
         json["hooks"] = hooks
 
+        updateStatusLine(json: &json, python: python)
+
         if let data = try? JSONSerialization.data(
             withJSONObject: json,
             options: [.prettyPrinted, .sortedKeys]
         ) {
             try? data.write(to: settingsURL)
         }
+    }
+
+    /// Registers our statusLine command — the only way to read "Your usage
+    /// limits" locally. Unlike `hooks`, `statusLine` is a single object, not
+    /// an array, so a user's own custom status line would be silently
+    /// destroyed by an unconditional overwrite. Only touch it when it's
+    /// unset or already ours.
+    private static func updateStatusLine(json: inout [String: Any], python: String) {
+        let command = "\(python) \(ClaudePaths.statusLineScriptShellPath)"
+
+        if let existing = json["statusLine"] as? [String: Any],
+           let existingCommand = existing["command"] as? String,
+           !existingCommand.contains("claude-island-statusline.py") {
+            return
+        }
+
+        json["statusLine"] = ["type": "command", "command": command]
     }
 
     // MARK: - Claude Code Version Detection
@@ -246,32 +275,42 @@ struct HookInstaller {
     static func uninstall() {
         let hooksDir = ClaudePaths.hooksDir
         let pythonScript = hooksDir.appendingPathComponent("claude-island-state.py")
+        let statusLineScript = hooksDir.appendingPathComponent("claude-island-statusline.py")
         let settings = ClaudePaths.settingsFile
 
         try? FileManager.default.removeItem(at: pythonScript)
+        try? FileManager.default.removeItem(at: statusLineScript)
 
         guard let data = try? Data(contentsOf: settings),
-              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              var hooks = json["hooks"] as? [String: Any] else {
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return
         }
 
-        for (event, value) in hooks {
-            if var entries = value as? [[String: Any]] {
-                entries = entries.compactMap { removingClaudeIslandHooks(from: $0) }
+        if var hooks = json["hooks"] as? [String: Any] {
+            for (event, value) in hooks {
+                if var entries = value as? [[String: Any]] {
+                    entries = entries.compactMap { removingClaudeIslandHooks(from: $0) }
 
-                if entries.isEmpty {
-                    hooks.removeValue(forKey: event)
-                } else {
-                    hooks[event] = entries
+                    if entries.isEmpty {
+                        hooks.removeValue(forKey: event)
+                    } else {
+                        hooks[event] = entries
+                    }
                 }
+            }
+
+            if hooks.isEmpty {
+                json.removeValue(forKey: "hooks")
+            } else {
+                json["hooks"] = hooks
             }
         }
 
-        if hooks.isEmpty {
-            json.removeValue(forKey: "hooks")
-        } else {
-            json["hooks"] = hooks
+        // Only remove statusLine if it's ours — never touch a user's own.
+        if let statusLine = json["statusLine"] as? [String: Any],
+           let command = statusLine["command"] as? String,
+           command.contains("claude-island-statusline.py") {
+            json.removeValue(forKey: "statusLine")
         }
 
         if let data = try? JSONSerialization.data(

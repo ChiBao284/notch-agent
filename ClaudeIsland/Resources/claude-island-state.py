@@ -95,6 +95,10 @@ def main():
         "tty": tty,
     }
 
+    permission_mode = data.get("permission_mode")
+    if permission_mode:
+        state["permission_mode"] = permission_mode
+
     # Map events to status
     if event == "UserPromptSubmit":
         # User just sent a message - Claude is now processing

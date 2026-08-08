@@ -52,6 +52,7 @@ class NotchViewModel: ObservableObject {
     private let soundSelector = SoundSelector.shared
     private let claudeDirSelector = ClaudeDirSelector.shared
     private let themeManager = ThemeManager.shared
+    private let hoverSpeedSelector = HoverSpeedSelector.shared
 
     // MARK: - Geometry
 
@@ -83,6 +84,7 @@ class NotchViewModel: ObservableObject {
                     + screenSelector.expandedPickerHeight
                     + soundSelector.expandedPickerHeight
                     + claudeDirSelector.expandedPickerHeight
+                    + hoverSpeedSelector.expandedPickerHeight
             )
         case .instances:
             // Rows carry three lines now (title, project/branch, last prompt),
@@ -135,6 +137,10 @@ class NotchViewModel: ObservableObject {
         themeManager.$isPickerExpanded
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+
+        hoverSpeedSelector.$isPickerExpanded
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
     }
 
     // MARK: - Event Handling
@@ -179,14 +185,20 @@ class NotchViewModel: ObservableObject {
         hoverTimer?.cancel()
         hoverTimer = nil
 
-        // Start hover timer to auto-expand after 1 second
+        // Start hover timer to auto-expand after the configured delay —
+        // instant mode opens immediately, with no timer at all.
         if isHovering && (status == .closed || status == .popping) {
+            let delay = AppSettings.hoverOpenSpeed.delay
+            guard delay > 0 else {
+                notchOpen(reason: .hover)
+                return
+            }
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self = self, self.isHovering else { return }
                 self.notchOpen(reason: .hover)
             }
             hoverTimer = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: workItem)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
         }
     }
 

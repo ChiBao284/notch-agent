@@ -35,7 +35,12 @@ struct ClaudeInstancesView: View {
     // MARK: - Empty State
 
     private var emptyState: some View {
-        OpenClaudeBackdrop(session: nil) {
+        OpenClaudeBackdrop(
+            session: nil,
+            rateLimits: sessionMonitor.accountRateLimits,
+            onActivate: { viewModel.notchClose() },
+            alignment: .center
+        ) {
             VStack(spacing: 8) {
                 Text("No sessions")
                     .font(.system(size: 13, weight: .medium))
@@ -110,10 +115,14 @@ struct ClaudeInstancesView: View {
             // more rows gets squeezed into half the panel.
             .layoutPriority(1)
 
-            // Blank space below the rows — a click here brings Claude back.
-            // Deliberately a sibling of the list rather than a background, so a
-            // click on a row can never reach it.
-            OpenClaudeBackdrop(session: focusTargetSession) { EmptyView() }
+            // Blank space below the rows — shows the plan usage dials, and a
+            // click here brings Claude back. Deliberately a sibling of the list
+            // rather than a background, so a click on a row can never reach it.
+            OpenClaudeBackdrop(
+                session: focusTargetSession,
+                rateLimits: sessionMonitor.accountRateLimits,
+                onActivate: { viewModel.notchClose() }
+            ) { EmptyView() }
         }
     }
 
@@ -144,21 +153,40 @@ struct ClaudeInstancesView: View {
 
 // MARK: - Open Claude Backdrop
 
-/// Fills the panel's blank space and reopens Claude when clicked.
+/// Fills the panel's blank space with the plan usage dials, and reopens Claude
+/// when clicked.
 ///
-/// The hint only appears on hover: the gesture would otherwise be invisible,
-/// but a permanent label would clutter a panel that is mostly a session list.
+/// Without usage data there is nothing to draw, so it falls back to the bare
+/// hover hint: the gesture would otherwise be invisible, but a permanent label
+/// would clutter a panel that is mostly a session list.
 private struct OpenClaudeBackdrop<Content: View>: View {
     let session: SessionState?
+    let rateLimits: RateLimitInfo?
+    /// Runs on tap, ahead of the launch, so the island can collapse out of the
+    /// way instead of waiting for Claude to come forward.
+    let onActivate: () -> Void
+    /// Where the readout sits in the room it is given: pinned to the bottom
+    /// under a session list, centred when it is the only thing on screen.
+    var alignment: Alignment = .bottom
     @ViewBuilder let content: () -> Content
 
     @State private var isHovering = false
+
+    private var hasUsage: Bool {
+        rateLimits?.fiveHour?.usedPercentage != nil || rateLimits?.sevenDay?.usedPercentage != nil
+    }
 
     var body: some View {
         VStack(spacing: 10) {
             content()
 
-            if isHovering {
+            if hasUsage {
+                PlanUsagePanel(
+                    rateLimits: rateLimits,
+                    isHovering: isHovering,
+                    onOpenClaude: openClaude
+                )
+            } else if isHovering {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.up.forward.app")
                         .font(.system(size: 10))
@@ -169,17 +197,24 @@ private struct OpenClaudeBackdrop<Content: View>: View {
                 .transition(.opacity)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Bottom-aligned under a list: the readout reads as the panel's footer.
+        // Centring it left the block floating in the middle of however much
+        // room the list happened to leave, so its position moved with the
+        // session count.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
         .contentShape(Rectangle())
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.15)) {
                 isHovering = hovering
             }
         }
-        .onTapGesture {
-            Task {
-                await ClaudeAppLauncher.shared.openClaude(fallbackSession: session)
-            }
+        .onTapGesture(perform: openClaude)
+    }
+
+    private func openClaude() {
+        onActivate()
+        Task {
+            await ClaudeAppLauncher.shared.openClaude(fallbackSession: session)
         }
     }
 }
@@ -221,6 +256,11 @@ struct InstanceRow: View {
     /// own title while no prompt has been parsed yet.
     private var headingText: String {
         session.lastUserMessage ?? session.displayTitle
+    }
+
+    private var contextHelpText: String {
+        guard let pct = session.displayContextWindow?.usedPercentage else { return "Context window" }
+        return "Context window: \(Int(pct.rounded()))%"
     }
 
     /// Whether the second line is reporting live activity rather than a reply.
@@ -329,43 +369,35 @@ struct InstanceRow: View {
 
             Spacer(minLength: 0)
 
-            // Action icons or approval buttons
+            // Action icons or approval buttons — the row itself is a single
+            // click to chat, so a dedicated chat button here is redundant.
             if isWaitingForApproval && isInteractiveTool {
-                // Interactive tools like AskUserQuestion - show chat + terminal buttons
-                HStack(spacing: 8) {
-                    IconButton(icon: "bubble.left") {
-                        onChat()
-                    }
-
-                    // Go to Terminal button
-                    if canFocusTerminal {
-                        TerminalButton(
-                            isEnabled: true,
-                            onTap: { onFocus() }
-                        )
-                    }
+                // Interactive tools like AskUserQuestion need the terminal to
+                // actually answer, so that button stays.
+                if canFocusTerminal {
+                    TerminalButton(
+                        isEnabled: true,
+                        onTap: { onFocus() }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
-                .transition(.opacity.combined(with: .scale(scale: 0.9)))
             } else if isWaitingForApproval {
                 InlineApprovalButtons(
-                    onChat: onChat,
                     onApprove: onApprove,
                     onReject: onReject
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
             } else {
                 HStack(spacing: 8) {
-                    // Chat icon - always show
-                    IconButton(icon: "bubble.left") {
-                        onChat()
-                    }
-
-                    // Focus icon - raises the terminal running this session
-                    if canFocusTerminal {
-                        IconButton(icon: "eye") {
-                            onFocus()
-                        }
-                    }
+                    // This session's context window usage, replacing the old
+                    // "raise terminal" eye icon — still reachable via the
+                    // crab icon or the chat's own "open desktop" button.
+                    UsageLimitRing(
+                        percentage: session.displayContextWindow?.usedPercentage,
+                        size: 16,
+                        helpText: contextHelpText
+                    )
+                    .frame(width: 24, height: 24)
 
                     // Archive button - only for idle or completed sessions
                     if session.phase == .idle || session.phase == .waitingForInput {
@@ -381,7 +413,7 @@ struct InstanceRow: View {
         .padding(.trailing, 14)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
+        .onTapGesture {
             onChat()
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isWaitingForApproval)
@@ -434,23 +466,14 @@ struct InstanceRow: View {
 
 /// Compact inline approval buttons with staggered animation
 struct InlineApprovalButtons: View {
-    let onChat: () -> Void
     let onApprove: () -> Void
     let onReject: () -> Void
 
-    @State private var showChatButton = false
     @State private var showDenyButton = false
     @State private var showAllowButton = false
 
     var body: some View {
         HStack(spacing: 6) {
-            // Chat button
-            IconButton(icon: "bubble.left") {
-                onChat()
-            }
-            .opacity(showChatButton ? 1 : 0)
-            .scaleEffect(showChatButton ? 1 : 0.8)
-
             Button {
                 onReject()
             } label: {
@@ -483,12 +506,9 @@ struct InlineApprovalButtons: View {
         }
         .onAppear {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.0)) {
-                showChatButton = true
-            }
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.05)) {
                 showDenyButton = true
             }
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.1)) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.05)) {
                 showAllowButton = true
             }
         }

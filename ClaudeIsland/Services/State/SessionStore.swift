@@ -129,6 +129,28 @@ actor SessionStore {
     // MARK: - Hook Event Processing
 
     private func processHookEvent(_ event: HookEvent) async {
+        // Synthetic event from our statusLine script, not a real Claude Code
+        // hook — it carries this session's context window usage (account-wide
+        // rate limits are handled separately by ClaudeSessionMonitor), not
+        // session lifecycle data. Letting it through the pipeline below would
+        // misread its placeholder `status` as a phase change.
+        if event.event == "StatusLine" {
+            if var session = sessions[event.sessionId] {
+                if let contextWindow = event.contextWindow {
+                    session.contextWindow = contextWindow
+                }
+                if let modelDisplayName = event.modelDisplayName {
+                    session.modelDisplayName = modelDisplayName
+                }
+                if let modelId = event.modelId {
+                    session.modelId = modelId
+                }
+                session.effortLevel = event.effortLevel
+                sessions[event.sessionId] = session
+            }
+            return
+        }
+
         let sessionId = event.sessionId
         let isNewSession = sessions[sessionId] == nil
         var session = sessions[sessionId] ?? createSession(from: event)
@@ -146,6 +168,9 @@ actor SessionStore {
         }
         if let tty = event.tty {
             session.tty = tty.replacingOccurrences(of: "/dev/", with: "")
+        }
+        if let rawMode = event.permissionMode, let mode = ClaudePermissionMode(rawValue: rawMode) {
+            session.permissionMode = mode
         }
         session.lastActivity = Date()
 

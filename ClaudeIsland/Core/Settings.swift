@@ -31,6 +31,35 @@ enum NotificationSound: String, CaseIterable {
     }
 }
 
+/// How eagerly the notch expands when the cursor hovers over it.
+enum HoverOpenSpeed: String, CaseIterable, Sendable {
+    case instant
+    case normal
+
+    var label: String {
+        switch self {
+        case .instant: return "Instant"
+        case .normal: return "Normal"
+        }
+    }
+
+    /// How long a sustained hover must last before it opens the notch.
+    var delay: TimeInterval {
+        switch self {
+        case .instant: return 0
+        case .normal: return 1.0
+        }
+    }
+
+    /// Spring response for the open animation — snappier for instant mode.
+    var openAnimationResponse: Double {
+        switch self {
+        case .instant: return 0.2
+        case .normal: return 0.42
+        }
+    }
+}
+
 enum AppSettings {
     private static let defaults = UserDefaults.standard
 
@@ -40,6 +69,7 @@ enum AppSettings {
         static let notificationSound = "notificationSound"
         static let claudeDirectoryName = "claudeDirectoryName"
         static let themeMode = "themeMode"
+        static let hoverOpenSpeed = "hoverOpenSpeed"
     }
 
     // MARK: - Theme
@@ -71,6 +101,23 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue.rawValue, forKey: Keys.notificationSound)
+        }
+    }
+
+    // MARK: - Hover Open Speed
+
+    /// How quickly hovering the notch opens it. Defaults to the original
+    /// 1-second-delay behavior so existing users see no change unopted-in.
+    static var hoverOpenSpeed: HoverOpenSpeed {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.hoverOpenSpeed),
+                  let mode = HoverOpenSpeed(rawValue: rawValue) else {
+                return .normal
+            }
+            return mode
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Keys.hoverOpenSpeed)
         }
     }
 

@@ -190,37 +190,39 @@ struct ChatView: View {
     @State private var isHeaderHovered = false
 
     private var chatHeader: some View {
-        Button {
-            viewModel.exitChat()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.notchFG.opacity(isHeaderHovered ? 1.0 : 0.6))
-                    .frame(width: 24, height: 24)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(session.displayTitle)
+        HStack(spacing: 8) {
+            Button {
+                viewModel.exitChat()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.left")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.notchFG.opacity(isHeaderHovered ? 1.0 : 0.85))
-                        .lineLimit(1)
+                        .foregroundColor(.notchFG.opacity(isHeaderHovered ? 1.0 : 0.6))
+                        .frame(width: 24, height: 24)
 
-                    // Which checkout this session is on, and whether it is still
-                    // working or how long ago it finished.
-                    SessionMetaLine(session: session, showsTiming: true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(session.displayTitle)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.notchFG.opacity(isHeaderHovered ? 1.0 : 0.85))
+                            .lineLimit(1)
+
+                        // Which checkout this session is on, and whether it is still
+                        // working or how long ago it finished.
+                        SessionMetaLine(session: session, showsTiming: true)
+                    }
                 }
-
-                Spacer()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isHeaderHovered ? Color.notchFG.opacity(0.08) : Color.clear)
+                )
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isHeaderHovered ? Color.notchFG.opacity(0.08) : Color.clear)
-            )
+            .buttonStyle(.plain)
+            .onHover { isHeaderHovered = $0 }
+
+            Spacer(minLength: 4)
         }
-        .buttonStyle(.plain)
-        .onHover { isHeaderHovered = $0 }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(Color.notchBar)
@@ -372,6 +374,14 @@ struct ChatView: View {
         channel.canSend
     }
 
+    /// Whether the composer holds anything that would survive trimming.
+    ///
+    /// Gating on `inputText.isEmpty` instead would arm the send button for text
+    /// that `sendMessage` then discards, leaving a button that does nothing.
+    private var hasSendableText: Bool {
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var inputBar: some View {
         VStack(spacing: 6) {
             // Why the last send did not land. Shown here rather than blocking the
@@ -389,24 +399,51 @@ struct ChatView: View {
                 .transition(.opacity)
             }
 
-            HStack(spacing: 10) {
-                TextField(channel.placeholder, text: $inputText)
+            HStack(alignment: .bottom, spacing: 10) {
+                Button {
+                    openOnDesktop()
+                } label: {
+                    Image(systemName: "arrow.up.forward.app")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.notchFG.opacity(0.6))
+                        .frame(width: 32, height: 36)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color.notchFG.opacity(0.08))
+                        )
+                }
+                .buttonStyle(.plain)
+                .help(inputText.isEmpty ? ClaudeAppLauncher.shared.actionHint : "Send and \(ClaudeAppLauncher.shared.actionHint.lowercased())")
+
+                TextField(channel.placeholder, text: $inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundColor(.notchFG)
                     .focused($isInputFocused)
+                    .lineLimit(1...5)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(
-                        RoundedRectangle(cornerRadius: 20)
+                        RoundedRectangle(cornerRadius: 18)
                             .fill(Color.notchFG.opacity(0.08))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 20)
+                                RoundedRectangle(cornerRadius: 18)
                                     .strokeBorder(Color.notchFG.opacity(0.1), lineWidth: 1)
                             )
                     )
-                    .onSubmit {
+                    // Return sends; Shift+Return falls through to the field's
+                    // default behavior and inserts a newline instead.
+                    //
+                    // A bare Return on a blank composer is swallowed rather than
+                    // ignored: letting it through makes the multi-line field
+                    // insert a newline, and the composer would then hold "\n" —
+                    // blank to the eye, but non-empty enough to light up the
+                    // send button and hide the placeholder, on a message that
+                    // trims away to nothing and can never be sent.
+                    .onKeyPress(keys: [.return]) { press in
+                        guard !press.modifiers.contains(.shift) else { return .ignored }
                         sendMessage()
+                        return .handled
                     }
 
                 Button {
@@ -414,11 +451,13 @@ struct ChatView: View {
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 28))
-                        .foregroundColor(inputText.isEmpty ? .notchFG.opacity(0.2) : .notchFG.opacity(0.9))
+                        .foregroundColor(hasSendableText ? .notchFG.opacity(0.9) : .notchFG.opacity(0.2))
                 }
                 .buttonStyle(.plain)
-                .disabled(inputText.isEmpty)
+                .disabled(!hasSendableText)
             }
+
+            SessionStatusRow(session: session)
         }
         .animation(.easeOut(duration: 0.2), value: sendError)
         .padding(.horizontal, 16)
@@ -491,7 +530,13 @@ struct ChatView: View {
 
     private func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty else {
+            // Whitespace-only content still has to go: left in place it keeps
+            // the field looking blank while counting as non-empty, so the
+            // composer sits there refusing to send and refusing to reset.
+            inputText = ""
+            return
+        }
 
         inputText = ""
 
@@ -501,15 +546,47 @@ struct ChatView: View {
 
         // Don't add to history here - it will be synced from JSONL when UserPromptSubmit event fires
         Task {
-            let delivered = await MessageSender.send(text, to: session)
+            let outcome = await MessageSender.send(text, to: session)
+
+            await MainActor.run {
+                channel = outcome.channel
+                if outcome.delivered {
+                    sendError = nil
+                } else {
+                    // Hand the text back rather than losing it, and say why.
+                    if inputText.isEmpty { inputText = text }
+                    sendError = outcome.channel.failureExplanation
+                }
+            }
+        }
+    }
+
+    /// Paste whatever is typed (if anything) into Claude Desktop or the
+    /// session's terminal WITHOUT sending it, then bring that app forward —
+    /// the composer is a staging area here, not a second way to send.
+    private func openOnDesktop() {
+        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        viewModel.notchClose()
+
+        guard !text.isEmpty else {
+            Task {
+                await ClaudeAppLauncher.shared.openClaude(fallbackSession: session)
+            }
+            return
+        }
+
+        inputText = ""
+
+        Task {
+            let pasted = await MessageSender.paste(text, to: session)
+            await ClaudeAppLauncher.shared.openClaude(fallbackSession: session)
             let resolved = await MessageSender.resolveChannel(for: session)
 
             await MainActor.run {
                 channel = resolved
-                if delivered {
+                if pasted {
                     sendError = nil
                 } else {
-                    // Hand the text back rather than losing it, and say why.
                     if inputText.isEmpty { inputText = text }
                     sendError = resolved.failureExplanation
                 }

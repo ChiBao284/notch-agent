@@ -22,14 +22,33 @@ struct UsageInfo: Equatable {
 
     /// Formatted string for display (e.g., "12.5K tokens")
     var formattedTotal: String {
-        let total = totalTokens
-        if total >= 1_000_000 {
-            return String(format: "%.1fM", Double(total) / 1_000_000)
-        } else if total >= 1_000 {
-            return String(format: "%.1fK", Double(total) / 1_000)
-        }
-        return "\(total)"
+        Self.formattedCount(totalTokens)
     }
+
+    private static func formattedCount(_ n: Int) -> String {
+        if n >= 1_000_000 {
+            return String(format: "%.1fM", Double(n) / 1_000_000)
+        } else if n >= 1_000 {
+            return String(format: "%.1fK", Double(n) / 1_000)
+        }
+        return "\(n)"
+    }
+}
+
+/// What the newest assistant turn says about the session's setup.
+///
+/// The statusLine hook reports the same things, but only Claude Code running in
+/// a terminal ever invokes it — under Claude Code Desktop these fields are the
+/// only source, so the chat footer would otherwise stay blank.
+struct TurnContext: Equatable {
+    /// Model id as the transcript records it, e.g. "claude-opus-5".
+    var modelId: String?
+    /// Reasoning effort for the turn, e.g. "max".
+    var effortLevel: String?
+    /// Tokens occupying the context window on the newest turn: fresh input plus
+    /// both halves of the cache. Not a running total — the latest turn's figure
+    /// *is* the current occupancy.
+    var contextTokens: Int?
 }
 
 struct ConversationInfo: Equatable {
@@ -42,6 +61,7 @@ struct ConversationInfo: Equatable {
     let lastAssistantMessage: String?  // Text of Claude's most recent reply
     let lastUserMessageDate: Date?  // Timestamp of last user message (for stable sorting)
     var usage: UsageInfo = UsageInfo()  // Token usage stats
+    var turnContext: TurnContext = TurnContext()  // Model / effort / context occupancy
 }
 
 actor ConversationParser {
@@ -193,13 +213,21 @@ actor ConversationParser {
     /// Every field's semantics survive this: the "last X" fields take the newest
     /// occurrence, so a hit in the new slice wins and a miss keeps the old value;
     /// `firstUserMessage` is the oldest occurrence so the cached one always wins;
-    /// usage is a running total so the slice's tokens are added.
+    /// usage is a running total so the slice's tokens are added; `turnContext`
+    /// describes the newest turn, so each field takes the slice's value when the
+    /// slice had one.
     private func merge(_ base: ConversationInfo, with delta: ContentDelta) -> ConversationInfo {
         var usage = base.usage
         usage.inputTokens += delta.usage.inputTokens
         usage.outputTokens += delta.usage.outputTokens
         usage.cacheReadTokens += delta.usage.cacheReadTokens
         usage.cacheCreationTokens += delta.usage.cacheCreationTokens
+
+        let turnContext = TurnContext(
+            modelId: delta.turnContext.modelId ?? base.turnContext.modelId,
+            effortLevel: delta.turnContext.effortLevel ?? base.turnContext.effortLevel,
+            contextTokens: delta.turnContext.contextTokens ?? base.turnContext.contextTokens
+        )
 
         return ConversationInfo(
             summary: delta.summary ?? base.summary,
@@ -210,7 +238,8 @@ actor ConversationParser {
             lastUserMessage: delta.lastUserMessage.map { Self.truncateMessage($0, maxLength: 80) ?? $0 } ?? base.lastUserMessage,
             lastAssistantMessage: delta.lastAssistantMessage.map { Self.truncateMessage($0, maxLength: 90) ?? $0 } ?? base.lastAssistantMessage,
             lastUserMessageDate: delta.lastUserMessageDate ?? base.lastUserMessageDate,
-            usage: usage
+            usage: usage,
+            turnContext: turnContext
         )
     }
 
@@ -225,6 +254,7 @@ actor ConversationParser {
         var lastAssistantMessage: String?
         var lastUserMessageDate: Date?
         var usage = UsageInfo()
+        var turnContext = TurnContext()
     }
 
     /// Parse JSONL content
@@ -241,7 +271,8 @@ actor ConversationParser {
             lastUserMessage: Self.truncateMessage(delta.lastUserMessage, maxLength: 80),
             lastAssistantMessage: Self.truncateMessage(delta.lastAssistantMessage, maxLength: 90),
             lastUserMessageDate: delta.lastUserMessageDate,
-            usage: delta.usage
+            usage: delta.usage,
+            turnContext: delta.turnContext
         )
     }
 
@@ -267,12 +298,25 @@ actor ConversationParser {
 
             // Usage is a running total over every assistant turn.
             if json["type"] as? String == "assistant",
-               let message = json["message"] as? [String: Any],
-               let usageDict = message["usage"] as? [String: Any] {
-                delta.usage.inputTokens += usageDict["input_tokens"] as? Int ?? 0
-                delta.usage.outputTokens += usageDict["output_tokens"] as? Int ?? 0
-                delta.usage.cacheReadTokens += usageDict["cache_read_input_tokens"] as? Int ?? 0
-                delta.usage.cacheCreationTokens += usageDict["cache_creation_input_tokens"] as? Int ?? 0
+               let message = json["message"] as? [String: Any] {
+                if let usageDict = message["usage"] as? [String: Any] {
+                    let input = usageDict["input_tokens"] as? Int ?? 0
+                    let cacheRead = usageDict["cache_read_input_tokens"] as? Int ?? 0
+                    let cacheCreation = usageDict["cache_creation_input_tokens"] as? Int ?? 0
+
+                    delta.usage.inputTokens += input
+                    delta.usage.outputTokens += usageDict["output_tokens"] as? Int ?? 0
+                    delta.usage.cacheReadTokens += cacheRead
+                    delta.usage.cacheCreationTokens += cacheCreation
+
+                    // Context occupancy, unlike the totals above, is whatever
+                    // the newest turn reports — so assign rather than add.
+                    delta.turnContext.contextTokens = input + cacheRead + cacheCreation
+                }
+
+                // `effort` sits on the envelope, `model` inside the message.
+                delta.turnContext.modelId = message["model"] as? String ?? delta.turnContext.modelId
+                delta.turnContext.effortLevel = json["effort"] as? String ?? delta.turnContext.effortLevel
             }
         }
 

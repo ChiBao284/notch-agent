@@ -48,6 +48,13 @@ struct NotchView: View {
         sessionMonitor.instances.contains { $0.phase == .waitingForInput }
     }
 
+    /// Whether we have "Your usage limits" data to show — once true it stays
+    /// true, so the pill no longer fully hides on idle: it keeps a small
+    /// always-on usage readout instead.
+    private var hasUsageLimitsToShow: Bool {
+        sessionMonitor.accountRateLimits != nil
+    }
+
     // MARK: - Sizing
 
     private var closedNotchSize: CGSize {
@@ -95,8 +102,10 @@ struct NotchView: View {
             return 2 * max(0, closedNotchSize.height - 12) + 20 + permissionIndicatorWidth
         }
 
-        // Waiting for input just shows checkmark on right, no extra left indicator
-        if hasWaitingForInput {
+        // Waiting for input shows a checkmark on the right; with nothing else
+        // going on, a known usage limit shows its own ring there instead —
+        // both need the same room, no extra left indicator.
+        if hasWaitingForInput || hasUsageLimitsToShow {
             return 2 * max(0, closedNotchSize.height - 12) + 20
         }
 
@@ -171,7 +180,11 @@ struct NotchView: View {
     }
 
     // Animation springs
-    private let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.8, blendDuration: 0)
+    /// Snappier in Instant mode — the point of that setting is to feel immediate,
+    /// which the 0.42s default response would otherwise undercut.
+    private var openAnimation: Animation {
+        .spring(response: AppSettings.hoverOpenSpeed.openAnimationResponse, dampingFraction: 0.8, blendDuration: 0)
+    }
     private let closeAnimation = Animation.spring(response: 0.45, dampingFraction: 1.0, blendDuration: 0)
 
     // MARK: - Body
@@ -257,9 +270,17 @@ struct NotchView: View {
         activityCoordinator.expandingActivity.show && activityCoordinator.expandingActivity.type == .claude
     }
 
-    /// Whether to show the expanded closed state (processing, pending permission, or waiting for input)
+    /// Whether to show the expanded closed state (processing, pending permission, waiting for input, or a known usage limit)
     private var showClosedActivity: Bool {
-        isProcessing || hasPendingPermission || hasWaitingForInput
+        isProcessing || hasPendingPermission || hasWaitingForInput || hasUsageLimitsToShow
+    }
+
+    /// Tooltip for the weekly usage ring.
+    private var weeklyHelpText: String {
+        guard let window = sessionMonitor.accountRateLimits?.sevenDay, let pct = window.usedPercentage else {
+            return "Weekly limit"
+        }
+        return "Weekly limit: \(Int(pct.rounded()))%\(window.resetLabel)"
     }
 
     @ViewBuilder
@@ -295,7 +316,7 @@ struct NotchView: View {
                 HStack(spacing: 4) {
                     ClaudeCrabIcon(size: 14, animateLegs: isProcessing)
                         .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
-                        .modifier(OpenClaudeAction(isEnabled: viewModel.status == .opened, session: focusTargetSession))
+                        .modifier(OpenClaudeAction(isEnabled: viewModel.status == .opened, session: focusTargetSession, onActivate: { viewModel.notchClose() }))
 
                     // Permission indicator only (amber) - waiting for input shows checkmark on right
                     if hasPendingPermission {
@@ -346,6 +367,17 @@ struct NotchView: View {
                         .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
                         .frame(width: viewModel.status == .opened ? 20 : sideWidth)
                         .padding(.trailing, viewModel.status == .opened ? 0 : 4)
+                } else if hasUsageLimitsToShow {
+                    // Nothing else going on — the weekly usage ring fills the
+                    // right side instead of leaving it empty.
+                    UsageLimitRing(
+                        percentage: sessionMonitor.accountRateLimits?.sevenDay?.usedPercentage,
+                        size: 14,
+                        helpText: weeklyHelpText
+                    )
+                    .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
+                    .frame(width: viewModel.status == .opened ? 20 : sideWidth)
+                    .padding(.trailing, viewModel.status == .opened ? 0 : 4)
                 }
             }
         }
@@ -380,7 +412,7 @@ struct NotchView: View {
             if !showClosedActivity {
                 ClaudeCrabIcon(size: 14)
                     .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: !showClosedActivity)
-                    .modifier(OpenClaudeAction(isEnabled: true, session: focusTargetSession))
+                    .modifier(OpenClaudeAction(isEnabled: true, session: focusTargetSession, onActivate: { viewModel.notchClose() }))
                     .padding(.leading, 8)
             }
 
@@ -453,8 +485,9 @@ struct NotchView: View {
             // Show claude activity when processing or waiting for permission
             activityCoordinator.showActivity(type: .claude)
             isVisible = true
-        } else if hasWaitingForInput {
-            // Keep visible for waiting-for-input but hide the processing spinner
+        } else if hasWaitingForInput || hasUsageLimitsToShow {
+            // Keep visible for waiting-for-input, and for a known usage limit
+            // even with nothing else going on — but hide the processing spinner.
             activityCoordinator.hideActivity()
             isVisible = true
         } else {
@@ -465,7 +498,7 @@ struct NotchView: View {
             // Don't hide on non-notched devices - users need a visible target
             if viewModel.status == .closed && viewModel.hasPhysicalNotch {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    if !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && viewModel.status == .closed {
+                    if !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && !hasUsageLimitsToShow && viewModel.status == .closed {
                         isVisible = false
                     }
                 }
@@ -477,11 +510,18 @@ struct NotchView: View {
         switch newStatus {
         case .opened, .popping:
             isVisible = true
+            // The panel is about to show the usage dials, so top them up rather
+            // than waiting out the rest of the poll interval. Only on a real
+            // open — `.popping` fires on hover, which would be a request per
+            // pass of the cursor.
+            if newStatus == .opened {
+                sessionMonitor.refreshUsage()
+            }
         case .closed:
             // Don't hide on non-notched devices - users need a visible target
             guard viewModel.hasPhysicalNotch else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                if viewModel.status == .closed && !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && !activityCoordinator.expandingActivity.show {
+                if viewModel.status == .closed && !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && !hasUsageLimitsToShow && !activityCoordinator.expandingActivity.show {
                     isVisible = false
                 }
             }
@@ -567,6 +607,9 @@ struct NotchView: View {
 private struct OpenClaudeAction: ViewModifier {
     let isEnabled: Bool
     let session: SessionState?
+    /// Called immediately on tap, before Claude actually surfaces — lets the
+    /// notch collapse out of the way without waiting on the launch to finish.
+    var onActivate: () -> Void = {}
 
     @State private var isHovering = false
 
@@ -586,6 +629,7 @@ private struct OpenClaudeAction: ViewModifier {
                     }
                 }
                 .onTapGesture {
+                    onActivate()
                     Task {
                         await ClaudeAppLauncher.shared.openClaude(fallbackSession: session)
                     }

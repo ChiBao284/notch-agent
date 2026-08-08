@@ -69,6 +69,11 @@ enum ClaudePaths {
         shellQuote(claudeDir.appendingPathComponent("hooks/claude-island-state.py").path)
     }
 
+    /// Shell-safe absolute path for the statusLine command in settings.json.
+    static var statusLineScriptShellPath: String {
+        shellQuote(claudeDir.appendingPathComponent("hooks/claude-island-statusline.py").path)
+    }
+
     /// Invalidate the cached directory so the next access re-resolves.
     /// Call this when the user changes AppSettings.claudeDirectoryName.
     static func invalidateCache() {

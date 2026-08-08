@@ -18,6 +18,7 @@ struct NotchMenuView: View {
     @ObservedObject private var screenSelector = ScreenSelector.shared
     @ObservedObject private var soundSelector = SoundSelector.shared
     @ObservedObject private var themeManager = ThemeManager.shared
+    @ObservedObject private var hoverSpeedSelector = HoverSpeedSelector.shared
     @State private var hooksInstalled: Bool = false
     @State private var launchAtLogin: Bool = false
 
@@ -43,6 +44,7 @@ struct NotchMenuView: View {
                 ScreenPickerRow(screenSelector: screenSelector)
                 SoundPickerRow(soundSelector: soundSelector)
                 ClaudeDirPickerRow()
+                HoverSpeedPickerRow(hoverSpeedSelector: hoverSpeedSelector)
 
                 Divider()
                     .background(Color.notchFG.opacity(0.08))

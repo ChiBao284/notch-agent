@@ -161,39 +161,69 @@ enum MessageSender {
 
     // MARK: - Sending
 
+    /// What a send attempt did, and over which channel.
+    ///
+    /// The channel comes back with the result because it is the one actually
+    /// used. Re-resolving afterwards to explain a failure can pick a *different*
+    /// channel — the terminal may have come forward in the meantime — and then
+    /// the error message describes a route that never ran.
+    struct SendOutcome: Sendable {
+        let delivered: Bool
+        let channel: MessageChannel
+    }
+
     /// Deliver `text` to `session`. Resolves the channel fresh so a session that
     /// moved (or a permission that was just granted) is picked up.
     @discardableResult
-    static func send(_ text: String, to session: SessionState) async -> Bool {
+    static func send(_ text: String, to session: SessionState) async -> SendOutcome {
         let message = normalize(text)
-        guard !message.isEmpty else { return false }
-
         let channel = await resolveChannel(for: session)
+        guard !message.isEmpty else {
+            return SendOutcome(delivered: false, channel: channel)
+        }
 
         switch channel {
         case .resolving:
             // resolveChannel never returns this — it is the composer's initial state.
-            return false
+            return SendOutcome(delivered: false, channel: channel)
 
         case .tmux(let target):
-            return await ToolApprovalHandler.shared.sendMessage(message, to: target)
+            let ok = await ToolApprovalHandler.shared.sendMessage(message, to: target)
+            return SendOutcome(delivered: ok, channel: channel)
 
         case .terminalScript(let terminal, let tty):
             if await sendViaScript(message, terminal: terminal, tty: tty) {
-                return true
+                return SendOutcome(delivered: true, channel: channel)
             }
             // Scripting can fail because Automation was denied. Fall through to
             // keystrokes so the user still gets their message delivered.
             logger.debug("Script delivery failed, trying keystrokes")
-            return await sendViaKeystrokes(message, session: session)
+            let ok = await sendViaKeystrokes(message, session: session)
+            return SendOutcome(delivered: ok, channel: channel)
 
         case .keystrokes:
-            return await sendViaKeystrokes(message, session: session)
+            let ok = await sendViaKeystrokes(message, session: session)
+            return SendOutcome(delivered: ok, channel: channel)
 
         case .unavailable(let reason):
             logger.debug("No channel available: \(String(describing: reason), privacy: .public)")
-            return false
+            return SendOutcome(delivered: false, channel: channel)
         }
+    }
+
+    /// Type `text` into `session`'s terminal or Claude Desktop WITHOUT
+    /// pressing Return — it sits in the prompt for the user to review, edit,
+    /// or send themselves.
+    ///
+    /// Always uses simulated keystrokes, even for a tmux or scriptable
+    /// terminal: AppleScript's `do script`/`write text` submits the instant
+    /// it runs, so typing is the only delivery path that can leave text
+    /// unsent.
+    @discardableResult
+    static func paste(_ text: String, to session: SessionState) async -> Bool {
+        let message = normalize(text)
+        guard !message.isEmpty else { return false }
+        return await sendViaKeystrokes(message, session: session, pressReturn: false)
     }
 
     // MARK: - tmux
@@ -283,7 +313,7 @@ enum MessageSender {
 
     // MARK: - Keystrokes
 
-    private static func sendViaKeystrokes(_ message: String, session: SessionState) async -> Bool {
+    private static func sendViaKeystrokes(_ message: String, session: SessionState, pressReturn: Bool = true) async -> Bool {
         guard await MainActor.run(body: { KeystrokeTyper.isPermitted }) else { return false }
         guard let app = await TerminalFocuser.owningApp(of: session) else { return false }
 
@@ -304,7 +334,8 @@ enum MessageSender {
             KeystrokeTyper.type(
                 message,
                 intoPid: app.pid,
-                requiresTextFieldFocus: session.tty == nil
+                requiresTextFieldFocus: session.tty == nil,
+                pressReturn: pressReturn
             )
         }
     }

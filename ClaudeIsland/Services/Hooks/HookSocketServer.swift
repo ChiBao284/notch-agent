@@ -25,6 +25,14 @@ struct HookEvent: Codable, Sendable {
     let toolUseId: String?
     let notificationType: String?
     let message: String?
+    let permissionMode: String?
+    /// Only present on the synthetic "StatusLine" event our statusLine
+    /// script sends — Claude's own hooks never carry these fields.
+    let rateLimits: RateLimitInfo?
+    let contextWindow: ContextWindowInfo?
+    let modelDisplayName: String?
+    let modelId: String?
+    let effortLevel: String?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -33,10 +41,16 @@ struct HookEvent: Codable, Sendable {
         case toolUseId = "tool_use_id"
         case notificationType = "notification_type"
         case message
+        case permissionMode = "permission_mode"
+        case rateLimits = "rate_limits"
+        case contextWindow = "context_window"
+        case modelDisplayName = "model_display_name"
+        case modelId = "model_id"
+        case effortLevel = "effort_level"
     }
 
     /// Create a copy with updated toolUseId
-    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?) {
+    init(sessionId: String, cwd: String, event: String, status: String, pid: Int?, tty: String?, tool: String?, toolInput: [String: AnyCodable]?, toolUseId: String?, notificationType: String?, message: String?, permissionMode: String? = nil, rateLimits: RateLimitInfo? = nil, contextWindow: ContextWindowInfo? = nil, modelDisplayName: String? = nil, modelId: String? = nil, effortLevel: String? = nil) {
         self.sessionId = sessionId
         self.cwd = cwd
         self.event = event
@@ -48,6 +62,12 @@ struct HookEvent: Codable, Sendable {
         self.toolUseId = toolUseId
         self.notificationType = notificationType
         self.message = message
+        self.permissionMode = permissionMode
+        self.rateLimits = rateLimits
+        self.contextWindow = contextWindow
+        self.modelDisplayName = modelDisplayName
+        self.modelId = modelId
+        self.effortLevel = effortLevel
     }
 
     var sessionPhase: SessionPhase {
@@ -447,7 +467,13 @@ class HookSocketServer {
                 toolInput: event.toolInput,
                 toolUseId: toolUseId,  // Use resolved toolUseId
                 notificationType: event.notificationType,
-                message: event.message
+                message: event.message,
+                permissionMode: event.permissionMode,
+                rateLimits: event.rateLimits,
+                contextWindow: event.contextWindow,
+                modelDisplayName: event.modelDisplayName,
+                modelId: event.modelId,
+                effortLevel: event.effortLevel
             )
 
             let pending = PendingPermission(

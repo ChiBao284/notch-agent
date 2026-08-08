@@ -24,6 +24,9 @@ enum KeystrokeTyper {
     /// Return / Enter.
     private static let returnKeyCode: CGKeyCode = 36
 
+    /// Tab — posted with the Shift flag to cycle Claude Code's permission mode.
+    private static let tabKeyCode: CGKeyCode = 48
+
     /// Longer payloads on a single event get truncated by the window server.
     private static let chunkSize = 16
 
@@ -31,12 +34,39 @@ enum KeystrokeTyper {
         AXIsProcessTrusted()
     }
 
-    /// Type `text` then press Return, but only if `pid` owns the frontmost app.
+    /// Press Shift+Tab — the same keybinding a user presses to cycle Claude
+    /// Code's permission mode — but only if `pid` owns the frontmost app.
+    static func pressShiftTab(intoPid pid: pid_t) -> Bool {
+        guard isPermitted else {
+            logger.debug("Accessibility permission not granted")
+            return false
+        }
+
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+            logger.warning("Refusing to send Shift+Tab: target app is not frontmost")
+            return false
+        }
+
+        guard let source = CGEventSource(stateID: .combinedSessionState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: tabKeyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: tabKeyCode, keyDown: false) else {
+            return false
+        }
+
+        down.flags = .maskShift
+        up.flags = .maskShift
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+        return true
+    }
+
+    /// Type `text`, then press Return unless `pressReturn` is false — but only
+    /// if `pid` owns the frontmost app.
     ///
     /// Set `requiresTextFieldFocus` for GUI hosts such as Claude Desktop: a shell
     /// swallows anything you type, but an app window turns stray letters into
     /// keyboard shortcuts, so there we insist a text field really has focus.
-    static func type(_ text: String, intoPid pid: pid_t, requiresTextFieldFocus: Bool = false) -> Bool {
+    static func type(_ text: String, intoPid pid: pid_t, requiresTextFieldFocus: Bool = false, pressReturn: Bool = true) -> Bool {
         guard isPermitted else {
             logger.debug("Accessibility permission not granted")
             return false
@@ -64,7 +94,7 @@ enum KeystrokeTyper {
             index = end
         }
 
-        return postReturn(source: source)
+        return pressReturn ? postReturn(source: source) : true
     }
 
     // MARK: - Focus Check
