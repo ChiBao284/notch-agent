@@ -415,7 +415,7 @@ struct ChatView: View {
                 .buttonStyle(.plain)
                 .help(inputText.isEmpty ? ClaudeAppLauncher.shared.actionHint : "Send and \(ClaudeAppLauncher.shared.actionHint.lowercased())")
 
-                TextField(channel.placeholder, text: $inputText, axis: .vertical)
+                TextField("This is a feature for paid users", text: $inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundColor(.notchFG)
@@ -431,6 +431,7 @@ struct ChatView: View {
                                     .strokeBorder(Color.notchFG.opacity(0.1), lineWidth: 1)
                             )
                     )
+                    .disabled(true)
                     // Return sends; Shift+Return falls through to the field's
                     // default behavior and inserts a newline instead.
                     //

@@ -123,11 +123,17 @@ class NotchViewModel: ObservableObject {
     /// The list's own `.padding(.vertical, 4)`.
     private static let instanceListPadding: CGFloat = 8
 
-    /// `UsageReadoutPager` at its full layout: the taller of its two pages plus
-    /// the tab bar under them, measured at 145pt with a little slack. Reserved
-    /// even when usage hasn't arrived yet — the readout fetches on open, so it
-    /// is about to appear.
-    private static let usageReadoutHeight: CGFloat = 150
+    /// `UsageReadoutPager` at its full layout: the taller of its two pages
+    /// (136, sized with its own margin against `PlanUsagePanel`'s content)
+    /// plus the tab bar under them (~24) and the VStack spacing between (4),
+    /// with a little slack. Reserved even when usage hasn't arrived yet — the
+    /// readout fetches on open, so it is about to appear.
+    ///
+    /// Keep in sync with `UsageReadoutPager.pageHeight` — this must always be
+    /// at least that plus room for the tab bar, or a session competing for
+    /// space in `instancesList` squeezes the readout back below what its own
+    /// internal layout needs, and the tab bar overlaps the button above it.
+    private static let usageReadoutHeight: CGFloat = 170
 
     /// `NotchView` caps the panel *after* padding its body, so this height has
     /// to cover that padding too — leave it out and the content is squeezed by
