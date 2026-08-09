@@ -24,19 +24,13 @@ struct PlanUsagePanel: View {
 
     @ObservedObject private var account = ClaudeAccountReader.shared
 
-    private var hasAnyUsage: Bool {
-        rateLimits?.fiveHour?.usedPercentage != nil || rateLimits?.sevenDay?.usedPercentage != nil
-    }
-
     var body: some View {
-        if hasAnyUsage {
-            ViewThatFits(in: .vertical) {
-                fullLayout
-                compactLayout
-                // A long session list can leave too little room for even one
-                // line. Dropping out beats drawing a clipped half-dial.
-                EmptyView()
-            }
+        ViewThatFits(in: .vertical) {
+            fullLayout
+            compactLayout
+            // A long session list can leave too little room for even one
+            // line. Dropping out beats drawing a clipped half-dial.
+            EmptyView()
         }
     }
 

@@ -66,30 +66,55 @@ class NotchPanel: NSPanel {
 
     // MARK: - Click-through for areas outside the panel content
 
+    /// Whether the button currently held down was pressed on one of our views.
+    ///
+    /// A press that starts inside the panel and is released outside still has
+    /// its mouse-up delivered here. Passing that up-event through instead of to
+    /// the view leaves AppKit holding a tracking session that never ends — the
+    /// cursor keeps its drag state and the panel stops responding — and the
+    /// `ignoresMouseEvents` flag set on the way out is only ever cleared by a
+    /// change of notch status, so an open panel stays click-through.
+    private var isTrackingPressInsidePanel = false
+
     override func sendEvent(_ event: NSEvent) {
-        // For mouse events, check if we should pass through
-        if event.type == .leftMouseDown || event.type == .leftMouseUp ||
-           event.type == .rightMouseDown || event.type == .rightMouseUp {
-            // Get the location in window coordinates
-            let locationInWindow = event.locationInWindow
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown:
+            if passThroughIfNoViewWants(event) { return }
+            isTrackingPressInsidePanel = true
 
-            // Check if any view wants to handle this event
-            if let contentView = self.contentView,
-               contentView.hitTest(locationInWindow) == nil {
-                // No view wants this event - pass it through to windows behind
-                // by temporarily ignoring mouse events and re-posting
-                let screenLocation = convertPoint(toScreen: locationInWindow)
-                ignoresMouseEvents = true
-
-                // Re-post the event after a tiny delay
-                DispatchQueue.main.async { [weak self] in
-                    self?.repostMouseEvent(event, at: screenLocation)
-                }
-                return
+        case .leftMouseUp, .rightMouseUp:
+            // Close the tracking session its mouse-down opened, wherever the
+            // button happened to come back up.
+            if isTrackingPressInsidePanel {
+                isTrackingPressInsidePanel = false
+                break
             }
+            if passThroughIfNoViewWants(event) { return }
+
+        default:
+            break
         }
 
         super.sendEvent(event)
+    }
+
+    /// Hand `event` to whatever is behind the panel when no view here wants it.
+    /// Returns true when it was passed through and must go no further.
+    private func passThroughIfNoViewWants(_ event: NSEvent) -> Bool {
+        guard let contentView,
+              contentView.hitTest(event.locationInWindow) == nil else {
+            return false
+        }
+
+        // Pass through to windows behind by temporarily ignoring mouse events
+        // and re-posting.
+        let screenLocation = convertPoint(toScreen: event.locationInWindow)
+        ignoresMouseEvents = true
+
+        DispatchQueue.main.async { [weak self] in
+            self?.repostMouseEvent(event, at: screenLocation)
+        }
+        return true
     }
 
     private func repostMouseEvent(_ event: NSEvent, at screenLocation: NSPoint) {

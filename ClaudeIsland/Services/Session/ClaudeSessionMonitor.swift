@@ -33,7 +33,11 @@ class ClaudeSessionMonitor: ObservableObject {
     private static let usagePollInterval: Duration = .seconds(300)
 
     /// Floor between on-demand refreshes triggered by opening the notch.
-    private static let usageRefreshThrottle: TimeInterval = 30
+    ///
+    /// Matches the poll interval rather than sitting well under it: the windows
+    /// move over hours, and asking on every open is what got the endpoint to
+    /// start answering 429.
+    private static let usageRefreshThrottle: TimeInterval = 300
 
     init() {
         SessionStore.shared.sessionsPublisher
@@ -120,7 +124,7 @@ class ClaudeSessionMonitor: ObservableObject {
         usagePollTask?.cancel()
         usagePollTask = Task { [weak self] in
             while !Task.isCancelled {
-                let usage = await ClaudeUsageFetcher.fetchUsage()
+                let usage = await ClaudeUsageFetcher.shared.fetchUsage()
                 guard let self else { return }
                 self.lastUsageFetch = Date()
                 if let usage {
@@ -149,7 +153,7 @@ class ClaudeSessionMonitor: ObservableObject {
         lastUsageFetch = now
 
         Task { [weak self] in
-            if let usage = await ClaudeUsageFetcher.fetchUsage() {
+            if let usage = await ClaudeUsageFetcher.shared.fetchUsage() {
                 self?.accountRateLimits = usage
             }
         }

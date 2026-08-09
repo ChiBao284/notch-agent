@@ -172,30 +172,19 @@ private struct OpenClaudeBackdrop<Content: View>: View {
 
     @State private var isHovering = false
 
-    private var hasUsage: Bool {
-        rateLimits?.fiveHour?.usedPercentage != nil || rateLimits?.sevenDay?.usedPercentage != nil
-    }
-
     var body: some View {
         VStack(spacing: 10) {
             content()
 
-            if hasUsage {
-                UsageReadoutPager(
-                    rateLimits: rateLimits,
-                    isHovering: isHovering,
-                    onOpenClaude: openClaude
-                )
-            } else if isHovering {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.up.forward.app")
-                        .font(.system(size: 10))
-                    Text(ClaudeAppLauncher.shared.actionHint)
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .foregroundColor(.notchFG.opacity(0.35))
-                .transition(.opacity)
-            }
+            // Always shown. Gating this on having plan-limit data also hid the
+            // token heatmap, which comes from the transcripts and has nothing
+            // to do with the usage endpoint — so a rate-limited or signed-out
+            // fetch blanked the whole footer, tabs included.
+            UsageReadoutPager(
+                rateLimits: rateLimits,
+                isHovering: isHovering,
+                onOpenClaude: openClaude
+            )
         }
         // Bottom-aligned under a list: the readout reads as the panel's footer.
         // Centring it left the block floating in the middle of however much
@@ -395,7 +384,10 @@ struct InstanceRow: View {
                     UsageLimitRing(
                         percentage: session.displayContextWindow?.usedPercentage,
                         size: 16,
-                        helpText: contextHelpText
+                        lineWidth: 2.5,
+                        helpText: contextHelpText,
+                        tint: TerminalColors.blue,
+                        showsTrack: true
                     )
                     .frame(width: 24, height: 24)
 

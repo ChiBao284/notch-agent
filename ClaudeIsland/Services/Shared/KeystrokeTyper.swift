@@ -77,7 +77,7 @@ enum KeystrokeTyper {
             return false
         }
 
-        if requiresTextFieldFocus && !focusedElementAcceptsText() {
+        if requiresTextFieldFocus && !focusedElementAcceptsText(pid: pid) {
             logger.warning("Refusing to type: no text field has focus")
             return false
         }
@@ -99,49 +99,88 @@ enum KeystrokeTyper {
 
     // MARK: - Focus Check
 
-    /// Whether the system-wide focused element would accept typed text.
+    /// Total time to give a text field to take focus before giving up.
     ///
-    /// Retries briefly: a Chromium/Electron host (e.g. Claude Desktop) only
-    /// finishes wiring up its accessibility tree after the first AX query
-    /// against it, so a check made right after activating the app can come
-    /// back empty even though the composer genuinely has focus.
-    private static func focusedElementAcceptsText() -> Bool {
-        for attempt in 0..<3 {
-            if focusedElementAcceptsTextOnce() { return true }
-            if attempt < 2 { usleep(150_000) }
-        }
+    /// A Chromium/Electron host (e.g. Claude Desktop) finishes wiring up its
+    /// accessibility tree some indeterminate time after activation — cold
+    /// activations (app was backgrounded, or its window needed restoring) have
+    /// been observed to land the composer's focus noticeably later than a
+    /// warm one. The budget is generous because it only costs time on the
+    /// failure path: a focused composer is normally detected on one of the
+    /// first couple of polls, well under this ceiling.
+    private static let focusPollBudget: TimeInterval = 1.5
+    private static let focusPollInterval: useconds_t = 100_000
+
+    /// Whether a focused element that would accept typed text can be found,
+    /// polling until `focusPollBudget` elapses.
+    ///
+    /// Checks two sources each pass: the system-wide focused element (the
+    /// common case), and the target app's own idea of what it focused — the
+    /// two can briefly disagree right after activation, with the app's
+    /// internal state sometimes ahead of what the system-wide element reports.
+    private static func focusedElementAcceptsText(pid: pid_t) -> Bool {
+        let deadline = Date().addingTimeInterval(focusPollBudget)
+        var lastSeenRole: String?
+
+        repeat {
+            let (accepts, role) = focusedElementAcceptsTextOnce(pid: pid)
+            if accepts { return true }
+            lastSeenRole = role ?? lastSeenRole
+            usleep(focusPollInterval)
+        } while Date() < deadline
+
+        // Not proof of what the composer's real shape is — only of whatever
+        // last happened to hold focus while we were looking — but it turns
+        // the next occurrence of this failure into a concrete lead instead of
+        // another blind guess.
+        logger.warning("No text field took focus within \(Self.focusPollBudget, format: .fixed(precision: 1))s — last focused role seen: \(lastSeenRole ?? "none", privacy: .public)")
         return false
     }
 
-    private static func focusedElementAcceptsTextOnce() -> Bool {
-        let systemWide = AXUIElementCreateSystemWide()
+    private static func focusedElementAcceptsTextOnce(pid: pid_t) -> (accepts: Bool, role: String?) {
+        let systemWide = describeFocus(of: AXUIElementCreateSystemWide())
+        if systemWide?.accepts == true { return systemWide! }
 
+        let appLevel = describeFocus(of: AXUIElementCreateApplication(pid))
+        if appLevel?.accepts == true { return appLevel! }
+
+        return (false, appLevel?.role ?? systemWide?.role)
+    }
+
+    /// `element`'s focused descendant: whether it would accept typed text —
+    /// either a proper text role, or (Electron's frequent shape) a generic
+    /// element with a settable value — and its role, for diagnostics. Nil when
+    /// `element` reports no focused descendant at all.
+    private static func describeFocus(of element: AXUIElement) -> (accepts: Bool, role: String?)? {
         var focusedValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
-            systemWide,
+            element,
             kAXFocusedUIElementAttribute as CFString,
             &focusedValue
         ) == .success, let focusedValue else {
-            return false
+            return nil
         }
 
-        let element = focusedValue as! AXUIElement
+        let focused = focusedValue as! AXUIElement
 
         var roleValue: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue) == .success,
-           let role = roleValue as? String,
-           role == kAXTextFieldRole as String || role == kAXTextAreaRole as String {
-            return true
+        let role = (AXUIElementCopyAttributeValue(focused, kAXRoleAttribute as CFString, &roleValue) == .success)
+            ? roleValue as? String
+            : nil
+
+        if role == kAXTextFieldRole as String || role == kAXTextAreaRole as String {
+            return (true, role)
         }
 
         // Electron composers frequently expose themselves as a generic element
         // with a writable value rather than a text role — accept those too.
         var settable: DarwinBoolean = false
-        if AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success {
-            return settable.boolValue
+        if AXUIElementIsAttributeSettable(focused, kAXValueAttribute as CFString, &settable) == .success,
+           settable.boolValue {
+            return (true, role)
         }
 
-        return false
+        return (false, role)
     }
 
     // MARK: - Event Posting

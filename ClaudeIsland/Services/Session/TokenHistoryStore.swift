@@ -88,6 +88,10 @@ actor TokenHistoryStore {
         var tokensByDay: [Int: Int] = [:]
         var tokensByModel: [String: Int] = [:]
         let monthOffsets = dayOffsetsPerMonth(year: year)
+        // Transcripts stamp everything in UTC, but a "day" on the heatmap has
+        // to be the user's day — otherwise an evening here lands on tomorrow's
+        // square and the active-day count comes out wrong.
+        let utcOffsetMinutes = TimeZone.current.secondsFromGMT() / 60
 
         for file in files {
             // One file at a time: the corpus as a whole is far too big to hold,
@@ -105,12 +109,19 @@ actor TokenHistoryStore {
                     return
                 }
 
-                guard let day = dayOfYear(fromISODate: timestamp, in: year, monthOffsets: monthOffsets) else { return }
+                guard let day = dayOfYear(
+                    fromISODate: timestamp,
+                    in: year,
+                    monthOffsets: monthOffsets,
+                    utcOffsetMinutes: utcOffsetMinutes
+                ) else { return }
 
+                // Fresh input plus output, with both halves of the cache left
+                // out. Cache reads are re-read context rather than new work and
+                // outweigh everything else by two orders of magnitude, so
+                // including them reports a number nothing else agrees with.
                 let tokens = (usage["input_tokens"] as? Int ?? 0)
                     + (usage["output_tokens"] as? Int ?? 0)
-                    + (usage["cache_read_input_tokens"] as? Int ?? 0)
-                    + (usage["cache_creation_input_tokens"] as? Int ?? 0)
                 guard tokens > 0 else { return }
 
                 tokensByDay[day, default: 0] += tokens
@@ -152,20 +163,25 @@ actor TokenHistoryStore {
         return offsets
     }
 
-    /// Day-of-year from an ISO-8601 timestamp, or nil when it falls outside
-    /// `year`.
+    /// Local day-of-year for a UTC ISO-8601 timestamp, or nil when it falls
+    /// outside `year` once shifted.
     ///
-    /// Reads the date straight off the "yyyy-MM-dd" prefix and adds a
-    /// precomputed month offset. This runs once per assistant turn across the
-    /// whole corpus — a `DateFormatter`, or even a `Calendar` round trip per
-    /// line, costs far more than the rest of the sweep put together.
+    /// Reads the fields straight off the "yyyy-MM-ddTHH:mm" prefix and does the
+    /// arithmetic by hand. This runs once per assistant turn across the whole
+    /// corpus — a `DateFormatter`, or even a `Calendar` round trip per line,
+    /// costs far more than the rest of the sweep put together.
+    ///
+    /// The offset is today's, applied to every timestamp. In a zone that
+    /// observes DST that misplaces entries within an hour of midnight on the
+    /// two changeover days; nowhere else is affected.
     private nonisolated static func dayOfYear(
         fromISODate timestamp: String,
         in year: Int,
-        monthOffsets: [Int]
+        monthOffsets: [Int],
+        utcOffsetMinutes: Int
     ) -> Int? {
         let digits = Array(timestamp.utf8)
-        guard digits.count >= 10 else { return nil }
+        guard digits.count >= 16 else { return nil }
 
         func number(_ range: Range<Int>) -> Int? {
             var value = 0
@@ -179,11 +195,21 @@ actor TokenHistoryStore {
 
         guard let parsedYear = number(0..<4), parsedYear == year,
               let month = number(5..<7), (1...12).contains(month),
-              let day = number(8..<10), (1...31).contains(day) else {
+              let day = number(8..<10), (1...31).contains(day),
+              let hour = number(11..<13), (0...23).contains(hour),
+              let minute = number(14..<16), (0...59).contains(minute) else {
             return nil
         }
 
-        return monthOffsets[month - 1] + day
+        let utcDayOfYear = monthOffsets[month - 1] + day
+        let localMinutes = (utcDayOfYear - 1) * 1440 + hour * 60 + minute + utcOffsetMinutes
+        let localDayOfYear = Int(floor(Double(localMinutes) / 1440)) + 1
+
+        // The shift can push a timestamp into the neighbouring year, which
+        // belongs to a different history than the one being built.
+        let daysInYear = monthOffsets[11] + 31
+        guard (1...daysInYear).contains(localDayOfYear) else { return nil }
+        return localDayOfYear
     }
 
     /// "claude-opus-5" -> "Opus". Nil for ids with no family, such as

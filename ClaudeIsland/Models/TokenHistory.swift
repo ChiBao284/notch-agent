@@ -70,7 +70,10 @@ struct TokenHistory: Equatable, Sendable {
             return (String(format: "%.1f", Double(total) / 1_000_000_000), "B")
         }
         if total >= 1_000_000 {
-            return (String(format: "%.0f", Double(total) / 1_000_000), "M")
+            // One decimal, not none: without cache reads the yearly figure sits
+            // in the tens of millions for a long time, and a bare "13M" hides
+            // months of movement.
+            return (String(format: "%.1f", Double(total) / 1_000_000), "M")
         }
         if total >= 1_000 {
             return (String(format: "%.0f", Double(total) / 1_000), "K")
